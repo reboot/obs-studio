@@ -55,6 +55,7 @@ gs_stagesurf_t *device_stagesurface_create(gs_device_t *device, uint32_t width,
 	surf->gl_internal_format = convert_gs_internal_format(color_format);
 	surf->gl_type            = get_gl_format_type(color_format);
 	surf->bytes_per_pixel    = gs_get_format_bpp(color_format)/8;
+	surf->buffer = (uint8_t *) malloc(surf->bytes_per_pixel * surf->width * surf->height);
 
 	if (!create_pixel_pack_buffer(surf)) {
 		blog(LOG_ERROR, "device_stagesurface_create (GL) failed");
@@ -205,16 +206,21 @@ enum gs_color_format gs_stagesurface_get_color_format(
 bool gs_stagesurface_map(gs_stagesurf_t *stagesurf, uint8_t **data,
 		uint32_t *linesize)
 {
+	uint8_t *ptr;
+
 	if (!gl_bind_buffer(GL_PIXEL_PACK_BUFFER, stagesurf->pack_buffer))
 		goto fail;
 
-	*data = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+	ptr = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
 	if (!gl_success("glMapBuffer"))
 		goto fail;
+
+	memcpy(stagesurf->buffer, ptr, stagesurf->bytes_per_pixel * stagesurf->width * stagesurf->height);
 
 	gl_bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
 
 	*linesize = stagesurf->bytes_per_pixel * stagesurf->width;
+	*data = stagesurf->buffer;
 	return true;
 
 fail:

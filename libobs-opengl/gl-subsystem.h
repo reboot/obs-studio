@@ -438,6 +438,8 @@ struct gs_stage_surface {
 	GLint                gl_internal_format;
 	GLenum               gl_type;
 	GLuint               pack_buffer;
+
+	uint8_t              *buffer;
 };
 
 struct gs_zstencil_buffer {
