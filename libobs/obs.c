@@ -843,11 +843,6 @@ void obs_shutdown(void)
 	obs_free_data();
 	obs_free_video();
 	obs_free_hotkeys();
-	obs_free_graphics();
-	proc_handler_destroy(obs->procs);
-	signal_handler_destroy(obs->signals);
-	obs->procs = NULL;
-	obs->signals = NULL;
 
 	module = obs->first_module;
 	while (module) {
@@ -856,6 +851,12 @@ void obs_shutdown(void)
 		module = next;
 	}
 	obs->first_module = NULL;
+
+	obs_free_graphics();
+	proc_handler_destroy(obs->procs);
+	obs->procs = NULL;
+	signal_handler_destroy(obs->signals);
+	obs->signals = NULL;
 
 	for (size_t i = 0; i < obs->module_paths.num; i++)
 		free_module_path(obs->module_paths.array+i);
