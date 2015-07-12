@@ -1,5 +1,5 @@
 /******************************************************************************
-Copyright (C) 2013-2014 by HomeWorld <homeworld@gmail.com>
+Copyright (C) 2015 by HomeWorld <homeworld@gmail.com>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -54,7 +54,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define SETTINGS_WGHT_TYPE "AVIS.WeightingType"
 #define TEXT_WGHT_TYPE_DESC obs_module_text("AVIS.WeightingTypeDesc")
 
-#define DB_MIN -72.0f
+#define DB_MIN -70.0f
 #define ACQ_RETRY_TIMEOUT_S 1.0f
 /**
  * TODO  Switch avis_audio and avis_fft to mp_float_buffer
@@ -545,9 +545,12 @@ static void audiovis_source_update(void *data, obs_data_t *settings)
 			bfree(context->bins_indexes);
 		if (context->spec_peaks)
 			bfree(context->spec_peaks);
+		if (context->weights)
+			bfree(context->weights);
 		context->spectrum = NULL;
 		context->bins_indexes = NULL;
 		context->spec_peaks = NULL;
+		context->weights = NULL;
 	}
 	
 	bins = context->bins;
@@ -597,10 +600,13 @@ static void audiovis_source_destroy(void *data)
 
 	if (context->spectrum)
 		bfree(context->spectrum);
+	
 	if (context->bins_indexes)
 		bfree(context->bins_indexes);
+	
 	if (context->spec_peaks)
 		bfree(context->spec_peaks);
+
 	if (context->weights)
 		bfree(context->weights);
 
@@ -671,10 +677,9 @@ static void avis_process_fft(struct audiovis_source *context)
 		}
 	}
 
-	__m128 wsize = _mm_set_ps1((float)ws);
+	__m128 wsize = _mm_set_ps1((float)ws * 0.5f);
 	for (uint32_t i = 0; i < ch; i++) {
 		float *fbuffer = fft_ctx->fft_buffers[i];
-
 		for (uint32_t j = 0; j < ws; j += 4 ) {
 			_mm_store_ps(fbuffer + j,
 				_mm_div_ps(_mm_load_ps(fbuffer +j), wsize));

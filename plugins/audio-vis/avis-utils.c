@@ -1,5 +1,5 @@
 /******************************************************************************
-Copyright (C) 2013-2014 by HomeWorld <homeworld@gmail.com>
+Copyright (C) 2015 by HomeWorld <homeworld@gmail.com>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
