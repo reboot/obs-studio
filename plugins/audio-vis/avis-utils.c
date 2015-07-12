@@ -1,3 +1,20 @@
+/******************************************************************************
+Copyright (C) 2013-2014 by HomeWorld <homeworld@gmail.com>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+******************************************************************************/
+
 #include <obs-module.h>
 #include "avis-utils.h"
 
@@ -150,11 +167,11 @@ uint32_t avis_freq_to_bin(float freq, uint32_t sample_rate, size_t size)
 	return (uint32_t)(freq / avis_get_bandwidth(sample_rate, size));
 }
 
-int avis_calc_octave_bins(uint32_t *bins, uint32_t sample_rate, size_t size,
-	int oct_den)
+int avis_calc_octave_bins(uint32_t *bins, float *weights, uint32_t sample_rate,
+	size_t size, int oct_den, enum AUDIO_WEIGHTING_TYPES weighting_type)
 {
 
-	float upFreq, lowFreq;
+	float up_freq, low_freq;
 	uint32_t bin_l, bin_u;
 
 	float center = 31.62777f;
@@ -162,20 +179,31 @@ int avis_calc_octave_bins(uint32_t *bins, uint32_t sample_rate, size_t size,
 
 	while (center < (float)sample_rate / 2.0f)
 	{
-		upFreq = center * powf(10,
+		up_freq = center * powf(10,
 			3.0f / (10.0f * 2 * (float)oct_den));
-		lowFreq = center / powf(10.0f,
+		low_freq = center / powf(10.0f,
 			3.0f / (10 * 2 * (float)oct_den));
 
-		bin_l = avis_freq_to_bin(lowFreq, sample_rate, size);
-		bin_u = avis_freq_to_bin(upFreq, sample_rate, size);
+		bin_l = avis_freq_to_bin(low_freq, sample_rate, size);
+		bin_u = avis_freq_to_bin(up_freq, sample_rate, size);
 
 		if (bin_u > size / 2)
 			bin_u = (uint32_t)size / 2 - 1;
 
 		if (center < (float)sample_rate / 2.0f && bin_u != bin_l) {
-			if (bins)
+			if (bins) {
 				bins[bands] = bin_l;
+				switch ((int)weighting_type) {
+				case AUDIO_WEIGHTING_TYPE_Z:
+					weights[bands] = 0.0f;
+					break;
+				case AUDIO_WEIGHTING_TYPE_A:
+					weights[bands] = aweighting(center);
+					break;
+				case AUDIO_WEIGHTING_TYPE_C:
+					weights[bands] = cweighting(center);
+				}
+			}
 			bands++;
 		}
 		center = center * powf(10, 3 / (10 * (float)oct_den));

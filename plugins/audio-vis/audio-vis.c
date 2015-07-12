@@ -1,3 +1,20 @@
+/******************************************************************************
+Copyright (C) 2013-2014 by HomeWorld <homeworld@gmail.com>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+******************************************************************************/
+
 #include <obs-module.h>
 #include <libavcodec/avfft.h>
 #include <libavutil/avutil.h>
@@ -33,6 +50,9 @@
 
 #define TEXT_BG_COLOR_DESC obs_module_text("AVIS.BgColorDesc")
 #define TEXT_FG_COLOR_DESC obs_module_text("AVIS.FgColorDesc")
+
+#define SETTINGS_WGHT_TYPE "AVIS.WeightingType"
+#define TEXT_WGHT_TYPE_DESC obs_module_text("AVIS.WeightingTypeDesc")
 
 #define DB_MIN -72.0f
 #define ACQ_RETRY_TIMEOUT_S 1.0f
@@ -86,13 +106,14 @@ struct audiovis_source {
 	uint32_t        *bins_indexes;
 	float           *spectrum;
 	float           *spec_peaks;
-	
+	float           *weights;
+	uint32_t        weighting_type;
+
 	uint32_t        fg_color;
 	uint32_t        bg_color;
 	bool            visible;
 
 	pthread_mutex_t audio_mutex;
-
 };
 
 static void alloc_fft_buffers(avis_fft_t *fft_ctx)
@@ -482,6 +503,9 @@ static void avis_update_settings(struct audiovis_source *context,
 	context->bg_color = (uint32_t)obs_data_get_int(settings,
 		SETTINGS_BG_COLOR);
 
+	context->weighting_type = (uint32_t)obs_data_get_int(settings,
+		SETTINGS_WGHT_TYPE);
+
 	context->cx = 640;
 	context->cy = 360;
 }
@@ -490,7 +514,7 @@ static void audiovis_source_update(void *data, obs_data_t *settings)
 {
 	struct audiovis_source *context = data;
 	struct obs_audio_info  oai;
-	uint32_t channels, sample_rate, bins, oct_subdiv;
+	uint32_t channels, sample_rate, bins, oct_subdiv, weighting_type;
 	size_t   window_size;
 
 	if (!context)
@@ -506,11 +530,12 @@ static void audiovis_source_update(void *data, obs_data_t *settings)
 	sample_rate = oai.samples_per_sec;
 	window_size = context->window_size;
 	oct_subdiv  = context->oct_subdiv;
+	weighting_type = context->weighting_type;
 
 	bins = context->bins;
 
-	context->bins = avis_calc_octave_bins(NULL,
-		sample_rate, window_size, oct_subdiv);
+	context->bins = avis_calc_octave_bins(NULL, NULL,
+		sample_rate, window_size, oct_subdiv, weighting_type);
 
 	
 	if (bins != context->bins) {
@@ -533,9 +558,11 @@ static void audiovis_source_update(void *data, obs_data_t *settings)
 		context->bins_indexes = bzalloc((bins +1) *sizeof(uint32_t));
 	if (!context->spec_peaks)
 		context->spec_peaks = bzalloc((bins + 1) * sizeof(float));
+	if (!context->weights)
+		context->weights = bzalloc((bins + 1) * sizeof(float));
 
-	avis_calc_octave_bins(context->bins_indexes,
-		sample_rate, window_size, oct_subdiv);
+	avis_calc_octave_bins(context->bins_indexes, context->weights,
+		sample_rate, window_size, oct_subdiv, weighting_type);
 
 
 	avis_init_audio_context(context, channels, window_size);
@@ -574,6 +601,8 @@ static void audiovis_source_destroy(void *data)
 		bfree(context->bins_indexes);
 	if (context->spec_peaks)
 		bfree(context->spec_peaks);
+	if (context->weights)
+		bfree(context->weights);
 
 	pthread_mutex_destroy(&context->audio_mutex);
 	
@@ -737,7 +766,8 @@ static void draw_vis(void *data)
 
 		mag /= (float)channels;
 		mag = 10.0f * log10f(mag);
-
+		mag += context->weights[b];
+		
 		if (mag < DB_MIN)
 			mag = DB_MIN;
 
@@ -917,6 +947,18 @@ static obs_properties_t *audiovis_source_properties(void *data)
 
 	dstr_free(&str);
 
+	const char *wgtype[] = {"Z (Flat)", "A"};
+
+	prop = obs_properties_add_list(
+		props,
+		SETTINGS_WGHT_TYPE,
+		TEXT_WGHT_TYPE_DESC,
+		OBS_COMBO_TYPE_LIST,
+		OBS_COMBO_FORMAT_INT);
+
+	for (int i = 0; i < 2; i++)
+		obs_property_list_add_int(prop, wgtype[i], i);
+
 	obs_properties_add_color(props, SETTINGS_FG_COLOR, TEXT_FG_COLOR_DESC);
 	obs_properties_add_color(props, SETTINGS_BG_COLOR, TEXT_BG_COLOR_DESC);
 
@@ -930,6 +972,7 @@ static void audiovis_source_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, SETTINGS_OCTAVE_FRACT, 3);
 	obs_data_set_default_int(settings, SETTINGS_FG_COLOR, 0xFF00FFFF);
 	obs_data_set_default_int(settings, SETTINGS_BG_COLOR, 0x00000000);
+	obs_data_set_default_int(settings, SETTINGS_WGHT_TYPE, 1);
 }
 
 static struct obs_source_info audiovis_source_info = {

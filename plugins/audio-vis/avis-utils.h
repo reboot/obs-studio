@@ -1,3 +1,20 @@
+/******************************************************************************
+Copyright (C) 2013-2014 by HomeWorld <homeworld@gmail.com>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+******************************************************************************/
+
 #pragma once
 
 #define AVIS_ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
@@ -6,7 +23,7 @@
 extern "C" {
 #endif
 
-enum AUDIO_WINDOW_TYPES{
+enum AUDIO_WINDOW_TYPES {
 	AUDIO_WINDOW_TYPE_RECTANGULAR,
 	AUDIO_WINDOW_TYPE_HANNING,
 	AUDIO_WINDOW_TYPE_HAMMING,
@@ -16,6 +33,11 @@ enum AUDIO_WINDOW_TYPES{
 	AUDIO_WINDOW_TYPE_BLACKMAN_HARRIS
 };
 
+enum AUDIO_WEIGHTING_TYPES {
+	AUDIO_WEIGHTING_TYPE_Z,
+	AUDIO_WEIGHTING_TYPE_A,
+	AUDIO_WEIGHTING_TYPE_C
+};
 
 struct avis_rect
 {
@@ -40,8 +62,8 @@ void avis_calc_window_coefs(float *buffer, size_t size,
  *                 1 / oct_den cases
  * @return         Number of bins  [bands = bins - 1]
  */
-int avis_calc_octave_bins(uint32_t *bins, uint32_t sample_rate, size_t size,
-	int oct_den);
+int avis_calc_octave_bins(uint32_t *bins, float *weights, uint32_t sample_rate,
+	size_t size, int oct_den, enum AUDIO_WEIGHTING_TYPES weighting_type);
 
 #ifdef __cplusplus
 }
