@@ -73,6 +73,12 @@ void avis_calc_window_coefs(float *buffer, size_t size,
 
 	a0 = a1 = a2 = a3 = a4 = 0.0f;
 
+	if (window_type == AUDIO_WINDOW_TYPE_RECTANGULAR) {
+		for (int i = 0; i < size; i++)
+			buffer[i] = 1.0f;
+		return;
+	}
+
 	switch ((int)window_type) {
 	case AUDIO_WINDOW_TYPE_HAMMING:
 		a0 = 0.53836f;
