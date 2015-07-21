@@ -11,9 +11,13 @@ include_directories(${FFMPEG_INCLUDE_DIRS})
 
 set(audio-vis_SOURCES
 	audio-vis.c
-	avis-utils.c)
+	avis-utils.c
+	audio-monitor.c
+	audio-buffer.c)
 set(audio-vis_HEADERS
-	avis-utils.h)
+	avis-utils.h
+	audio-monitor.h
+	audio-buffer.h)
 
 add_library(audio-vis MODULE
 	${audio-vis_HEADERS}

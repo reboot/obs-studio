@@ -18,12 +18,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <obs-module.h>
 #include "avis-utils.h"
 
-struct mp_float_buffer {
-	float    *buffers[MAX_AV_PLANES];
-	uint32_t planes;
-	size_t   plane_size;
-};
-
 
 bool avis_rect_intersection(avis_rect_t *a, avis_rect_t *b,
 	avis_rect_t *result)

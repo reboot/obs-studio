@@ -21,6 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <util/threading.h>
 #include <util/dstr.h>
 
+#include "audio-monitor.h"
 #include "avis-utils.h"
 
 #define blog(log_level, format, ...) \
@@ -56,19 +57,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #define DB_MIN -70.0f
 #define ACQ_RETRY_TIMEOUT_S 1.0f
-/**
- * TODO  Switch avis_audio and avis_fft to mp_float_buffer
- */
 
-struct avis_audio {
-	float    *buffers[MAX_AV_PLANES];
-	uint32_t channels;
-	size_t   window_size;
-	float    volume;
-
-};
-
-typedef struct avis_audio avis_audio_t;
 
 struct avis_fft {
 	float        *fft_buffers[MAX_AV_PLANES];
@@ -83,11 +72,10 @@ typedef struct avis_fft avis_fft_t;
 
 struct audiovis_source {
 	obs_source_t    *source;
-	obs_source_t    *audio_source;
 	const char      *audio_source_name;
 	float           acq_retry_timeout;
 
-	avis_audio_t    *audio_context;
+	audio_monitor_t *monitor;
 	avis_fft_t      *fft_context;
 
 	size_t          window_size;
@@ -106,14 +94,13 @@ struct audiovis_source {
 	uint32_t        *bins_indexes;
 	float           *spectrum;
 	float           *spec_peaks;
+	float           *spec_max;
 	float           *weights;
 	uint32_t        weighting_type;
 
 	uint32_t        fg_color;
 	uint32_t        bg_color;
 	bool            visible;
-
-	pthread_mutex_t audio_mutex;
 };
 
 static void alloc_fft_buffers(avis_fft_t *fft_ctx)
@@ -136,45 +123,9 @@ static void free_fft_buffers(avis_fft_t *fft_ctx)
 
 	for (uint32_t i = 0; i < fft_ctx->channels; i++)
 		bfree(fft_ctx->fft_buffers[i]);
-
 	bfree(fft_ctx->window_coefs);
 }
 
-static void alloc_audio_buffers(avis_audio_t *audio_ctx)
-{
-	if (!audio_ctx)
-		return;
-
-	for (uint32_t i = 0; i < audio_ctx->channels; i++)
-		audio_ctx->buffers[i] =
-			bzalloc(audio_ctx->window_size * sizeof(float));
-}
-
-static void free_audio_buffers(avis_audio_t *audio_ctx)
-{
-	if (!audio_ctx)
-		return;
-
-	for (uint32_t i = 0; i < audio_ctx->channels; i++)
-		bfree(audio_ctx->buffers[i]);
-
-}
-
-static void avis_release_audio_context(struct audiovis_source *context)
-{
-	if (!context)
-		return;
-	
-	pthread_mutex_lock(&context->audio_mutex);
-
-	if (context->audio_context)
-		free_audio_buffers(context->audio_context);
-
-	bfree(context->audio_context);
-	context->audio_context = NULL;
-
-	pthread_mutex_unlock(&context->audio_mutex);
-}
 
 static void avis_release_fft_context(struct audiovis_source *context)
 {
@@ -227,58 +178,32 @@ static void avis_init_fft_context(struct audiovis_source *context,
 }
 
 
-static void avis_init_audio_context(struct audiovis_source *context,
-				uint32_t channels,
-				size_t window_size)
-{
-	if (!context)
-		return;
-
-	if (context->audio_context) {
-		uint32_t nch = context->audio_context->channels;
-		size_t wsize = context->audio_context->window_size;
-		if (nch != channels || wsize != window_size) {
-			avis_release_audio_context(context);
-		}
-		else {
-			return;
-		}
-	}
-
-	pthread_mutex_lock(&context->audio_mutex);
-
-	context->audio_context = bzalloc(sizeof(avis_audio_t));
-	context->audio_context->channels = channels;
-	context->audio_context->window_size = window_size;
-	
-	alloc_audio_buffers(context->audio_context);
-
-	pthread_mutex_unlock(&context->audio_mutex);
-}
 
 static void avis_copy_buffers_and_apply_window(struct audiovis_source *context)
 {
 	avis_fft_t   *fft_context;
-	avis_audio_t *audio_context;
+	//avis_audio_t *audio_context;
+	audio_monitor_t *am;
 	size_t       window_size;
 	float        volume;
 
+
 	if (!context)
 		return;
+	am = context->monitor;
 
-	if(pthread_mutex_trylock(&context->audio_mutex) == EBUSY)
+	if(pthread_mutex_trylock(&am->data_mutex) == EBUSY)
 		return;
 	
 	fft_context   = context->fft_context;
-	audio_context = context->audio_context;
 	window_size   = fft_context->window_size;
-	volume        = audio_context->volume;
+	volume        = am->data->volume;
 	
 	__m128 vol    = _mm_set1_ps(volume);
 
 	for (uint32_t i = 0; i < fft_context->channels; i++) {
 		float *dst   = fft_context->fft_buffers[i];
-		float *src   = audio_context->buffers[i];
+		float *src   = am->data->buffer[i];
 		float *wcfs = fft_context->window_coefs;
 		for (float *d = dst, *s = src;
 			d < dst + window_size;
@@ -292,51 +217,7 @@ static void avis_copy_buffers_and_apply_window(struct audiovis_source *context)
 		}
 	}
 
-	pthread_mutex_unlock(&context->audio_mutex);
-}
-
-static void avis_audio_source_data_received_signal(void *vptr,
-	calldata_t *calldata)
-{
-	struct audiovis_source *context = vptr;
-	struct audio_data *data = calldata_ptr(calldata, "data");
-	size_t frames, window_size, offset;
-	uint32_t channels;
-
-	if (!context)
-		return;
-	if (!context->audio_context)
-		return;
-	
-	if (pthread_mutex_trylock(&context->audio_mutex) == EBUSY)
-		return;
-
-	frames      = data->frames;
-	window_size = context->audio_context->window_size;
-	offset      = window_size - frames;
-
-	context->audio_context->volume = data->volume;
-
-	if (frames > window_size)
-		return;
-
-	channels = context->audio_context->channels;
-
-	for (uint32_t i = 0; i < channels; i++) {
-		float *abuffer = context->audio_context->buffers[i];
-		float *adata   = (float*)data->data[i];
-		if (adata) {
-			memmove(abuffer,
-				abuffer + frames,
-				offset * sizeof(float));
-
-			memcpy(abuffer + offset,
-				adata,
-				frames * sizeof(float));
-		}
-	}
-
-	pthread_mutex_unlock(&context->audio_mutex);
+	pthread_mutex_unlock(&am->data_mutex);
 }
 
 static const char *audiovis_source_get_name(void)
@@ -388,100 +269,6 @@ static void avis_init_texture(struct audiovis_source *context)
 		context->framebuffer = bzalloc(cx * cy * 4);
 		obs_leave_graphics();
 	}
-}
-
-
-static void avis_release_audio_source(struct audiovis_source *context);
-
-static void avis_audio_source_removed_signal(void *vptr, calldata_t *calldata)
-{
-	UNUSED_PARAMETER(calldata);
-
-	struct audiovis_source *context = vptr;
-	
-	if (!context)
-		return;
-
-	avis_release_audio_source(context);
-}
-
-static void avis_release_audio_source(struct audiovis_source *context)
-{
-	if (!context)
-		return;
-
-	if (context->audio_source) {
-		signal_handler_t *sh;
-
-		sh = obs_source_get_signal_handler(context->audio_source);
-
-		pthread_mutex_lock(&context->audio_mutex);
-		signal_handler_disconnect(sh, "audio_data",
-			avis_audio_source_data_received_signal, context);
-		pthread_mutex_unlock(&context->audio_mutex);
-
-		signal_handler_disconnect(sh, "remove",
-			avis_audio_source_removed_signal, context);
-
-		obs_source_release(context->audio_source);
-		context->audio_source = NULL;
-		context->can_render = false;
-		context->acq_retry_timeout = ACQ_RETRY_TIMEOUT_S;
-	}
-}
-
-static void avis_acquire_audio_source(struct audiovis_source *context)
-{
-	if (!context)
-		return;
-
-	bool global_source_found   = false;
-	const char *source_name    = context->audio_source_name;
-	obs_source_t *audio_source = NULL;
-	signal_handler_t *sh;
-
-	for (uint32_t i = 1; i <= 10; i++) {
-		obs_source_t *source = obs_get_output_source(i);
-		if (source) {
-			uint32_t flags = obs_source_get_output_flags(source);
-			if (flags & OBS_SOURCE_AUDIO) {
-				const char *name = obs_source_get_name(source);
-				if (strcmp(name, source_name) == 0) {
-					global_source_found = true;
-					audio_source = source;
-					break;
-				}
-
-			}
-			obs_source_release(source);
-		}
-	}
-
-	if (!global_source_found)
-		audio_source = obs_get_source_by_name(source_name);
-
-	if (!audio_source)
-		return;
-
-	if (audio_source == context->audio_source) {
-		obs_source_release(audio_source);
-		return;
-	}
-	
-	avis_release_audio_source(context);
-
-	context->audio_source = audio_source;
-	
-	blog(LOG_INFO, "Source acquired: %s", source_name);
-
-	sh = obs_source_get_signal_handler(audio_source);
-	
-	signal_handler_connect(sh, "audio_data",
-		avis_audio_source_data_received_signal, context);
-	signal_handler_connect(sh, "remove",
-		avis_audio_source_removed_signal, context);
-	
-	context->can_render = true;
 }
 
 
@@ -547,10 +334,13 @@ static void audiovis_source_update(void *data, obs_data_t *settings)
 			bfree(context->spec_peaks);
 		if (context->weights)
 			bfree(context->weights);
+		if (context->spec_max)
+			bfree(context->spec_max);
 		context->spectrum = NULL;
 		context->bins_indexes = NULL;
 		context->spec_peaks = NULL;
 		context->weights = NULL;
+		context->spec_max = NULL;
 	}
 	
 	bins = context->bins;
@@ -563,16 +353,20 @@ static void audiovis_source_update(void *data, obs_data_t *settings)
 		context->spec_peaks = bzalloc((bins + 1) * sizeof(float));
 	if (!context->weights)
 		context->weights = bzalloc((bins + 1) * sizeof(float));
+	if (!context->spec_max)
+		context->spec_max = bzalloc((bins + 1) * sizeof(float));
 
 	avis_calc_octave_bins(context->bins_indexes, context->weights,
 		sample_rate, window_size, oct_subdiv, weighting_type);
 
+	if (context->monitor)
+		audio_monitor_destroy(context->monitor);
 
-	avis_init_audio_context(context, channels, window_size);
+	context->monitor = audio_monitor_init(context->audio_source_name,
+		sample_rate, channels, window_size);
+
 	avis_init_fft_context(context, sample_rate, channels, window_size,
 		AUDIO_WINDOW_TYPE_HANNING);
-	
-	avis_acquire_audio_source(context);
 }
 
 
@@ -582,7 +376,6 @@ static void *audiovis_source_create(obs_data_t *settings, obs_source_t *source)
 
 	context = bzalloc(sizeof(struct audiovis_source));
 	context->source = source;
-	pthread_mutex_init(&context->audio_mutex, NULL);
 	context->acq_retry_timeout = ACQ_RETRY_TIMEOUT_S;
 	audiovis_source_update(context, settings);
 
@@ -593,8 +386,8 @@ static void audiovis_source_destroy(void *data)
 {
 	struct audiovis_source *context = data;
 
-	avis_release_audio_source(context);
-	avis_release_audio_context(context);
+	audio_monitor_destroy(context->monitor);
+
 	avis_release_fft_context(context);
 	avis_release_texture(context);
 
@@ -610,8 +403,9 @@ static void audiovis_source_destroy(void *data)
 	if (context->weights)
 		bfree(context->weights);
 
-	pthread_mutex_destroy(&context->audio_mutex);
-	
+	if (context->spec_max)
+		bfree(context->spec_max);
+
 	bfree(context);
 }
 
@@ -766,7 +560,7 @@ static void draw_vis(void *data)
 				im = buffer[o * 2 + 1];
 				bmag += re * re + im * im;
 			}
-			mag += bmag / (stop -start);
+			mag += bmag / (stop - start);
 		}
 
 		mag /= (float)channels;
@@ -778,14 +572,14 @@ static void draw_vis(void *data)
 
 		mag = (DB_MIN - mag) / DB_MIN;
 
-		if (context->spectrum[b] > mag) {
-			context->spectrum[b] -=
-				(context->spectrum[b] - mag) *
-				context->frame_time * 10;
-		}
-		else {
+		//if (context->spectrum[b] > mag) {
+		//	context->spectrum[b] -=
+		//		(context->spectrum[b] - mag) *
+		//		context->frame_time * 10;
+		//}
+		//else {
 			context->spectrum[b] = mag;
-		}
+		//}
 		if (context->spec_peaks[b] > mag) {
 			context->spec_peaks[b] +=
 				log10f(context->spec_peaks[b]) *
@@ -809,6 +603,10 @@ static void draw_vis(void *data)
 	avis_rect_t view = { 0, 0, w, h };
 
 	for (uint32_t b = 0; b < bands; b++) {
+		if (context->spectrum[b] > context->spec_max[b])
+			context->spec_max[b] = context->spectrum[b];
+		if (context->spec_max[b])
+			context->spectrum[b] = context->spectrum[b] / context->spec_max[b];
 		int bh = (int)(h * context->spectrum[b]);
 		int by = (int)h - bh;
 		int ph = (int)(h * context->spec_peaks[b]);
@@ -840,8 +638,6 @@ static void audiovis_source_render(void *data, gs_effect_t *effect)
 
 	if (!context->tex)
 		return;
-	if (!context->can_render)
-		return;
 
 	gs_reset_blend_state();
 
@@ -857,14 +653,14 @@ static void audiovis_source_tick(void *data, float seconds)
 	context->global_time += seconds;
 	context->frame_time = seconds;
 	
-	if (!context->audio_source) {
+	if (!context->monitor->source) {
 		context->acq_retry_timeout -= seconds;
 		if (context->acq_retry_timeout < 0.0f) {
-			avis_acquire_audio_source(context);
+			audio_monitor_acquire_obs_source(context->monitor);
 			context->acq_retry_timeout = ACQ_RETRY_TIMEOUT_S;
 		}
 	}
-	else if (context->can_render && context->visible) {
+	else if (context->visible) {
 		draw_vis(context);
 	}
 }
