@@ -13,11 +13,15 @@ set(audio-vis_SOURCES
 	audio-vis.c
 	avis-utils.c
 	audio-monitor.c
-	audio-buffer.c)
+	audio-buffer.c
+	visual.c
+	vis-spectrum.c)
 set(audio-vis_HEADERS
 	avis-utils.h
 	audio-monitor.h
-	audio-buffer.h)
+	audio-buffer.h
+	visual.h
+	vis-spectrum.h)
 
 add_library(audio-vis MODULE
 	${audio-vis_HEADERS}

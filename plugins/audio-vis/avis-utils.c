@@ -174,10 +174,14 @@ int avis_calc_octave_bins(uint32_t *bins, float *weights, uint32_t sample_rate,
 	float up_freq, low_freq;
 	uint32_t bin_l, bin_u;
 
-	float center = 31.62777f;
-	int bands = 0;
+	float   center = 31.62777f;
+	int      bands = 0;
+	float max_freq = sample_rate / 2.0f;
+	
+	if (max_freq > 16000.0f)
+		max_freq = 16000.0f;
 
-	while (center < (float)sample_rate / 2.0f)
+	while (center < max_freq)
 	{
 		up_freq = center * powf(10,
 			3.0f / (10.0f * 2 * (float)oct_den));
@@ -190,7 +194,7 @@ int avis_calc_octave_bins(uint32_t *bins, float *weights, uint32_t sample_rate,
 		if (bin_u > size / 2)
 			bin_u = (uint32_t)size / 2 - 1;
 
-		if (center < (float)sample_rate / 2.0f && bin_u != bin_l) {
+		if (center < max_freq && bin_u != bin_l) {
 			if (bins) {
 				bins[bands] = bin_l;
 				switch ((int)weighting_type) {

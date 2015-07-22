@@ -22,8 +22,7 @@ void audio_buffer_destroy(audio_buffer_t *ab)
 {
 	uint32_t ch;
 
-	if (!ab)
-		return;
+	if (!ab) return;
 
 	for (ch = 0; ch < ab->channels; ch++)
 		bfree(ab->buffer[ch]);

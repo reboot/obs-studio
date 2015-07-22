@@ -55,7 +55,8 @@ void avis_calc_window_coefs(float *buffer, size_t size,
 	enum AUDIO_WINDOW_TYPES window_type);
 
 /**
- * @param bins     Array of at least fft window / 2 size
+ * @param bins     
+ * @param weights  Arrays of at least fft window / 2 size
  *                 Pass NULL if only the number of bins needs to be determined
  * @param size     FFT window size
  * @param oct_den  Octave denominator 1 2 3 6 12 24 48 ...

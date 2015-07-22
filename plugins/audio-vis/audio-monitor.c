@@ -40,11 +40,9 @@ static void audio_monitor_data_received_signal(void *vptr,
 
 void audio_monitor_acquire_obs_source(audio_monitor_t *am)
 {
-	if (!am)
-		return;
+	if (!am) return;
 
-	if (am->source)
-		return;
+	if (am->source) return;
 
 	bool global_source_found = false;
 
@@ -57,21 +55,22 @@ void audio_monitor_acquire_obs_source(audio_monitor_t *am)
 			uint32_t flags = obs_source_get_output_flags(source);
 			if (flags & OBS_SOURCE_AUDIO) {
 				const char *name = obs_source_get_name(source);
-				if (strcmp(name, am->name.array) == 0) {
-					global_source_found = true;
-					src = source;
-					break;
+				if (am->name.array) {
+					if (strcmp(name, am->name.array) == 0) {
+						global_source_found = true;
+						src = source;
+						break;
+					}
 				}
 			}
 			obs_source_release(source);
 		}
 	}
 
-	if (!global_source_found)
+	if (!global_source_found && am->name.array)
 		src = obs_get_source_by_name(am->name.array);
 
-	if (!src)
-		return;
+	if (!src) return;
 
 	am->source = src;
 
@@ -85,8 +84,7 @@ void audio_monitor_acquire_obs_source(audio_monitor_t *am)
 
 void audio_monitor_release_obs_source(audio_monitor_t *am)
 {
-	if (!am)
-		return;
+	if (!am) return;
 
 	if (am->source) {
 		signal_handler_t *sh;
@@ -116,11 +114,9 @@ static void audio_monitor_data_received_signal(void *vptr,
 	size_t frames, window_size, offset;
 	uint32_t channels;
 
-	if (!am)
-		return;
+	if (!am) return;
 
-	if (pthread_mutex_trylock(&am->data_mutex) == EBUSY)
-		return;
+	if (pthread_mutex_trylock(&am->data_mutex) == EBUSY) return;
 
 	frames = data->frames;
 	window_size = am->data->size;
@@ -129,7 +125,7 @@ static void audio_monitor_data_received_signal(void *vptr,
 	am->data->volume = data->volume;
 
 	if (frames > window_size)
-		return;
+		goto BAD_REALLY_BAD;
 
 	channels = am->data->channels;
 
@@ -146,7 +142,7 @@ static void audio_monitor_data_received_signal(void *vptr,
 				frames * sizeof(float));
 		}
 	}
-
+BAD_REALLY_BAD:
 	pthread_mutex_unlock(&am->data_mutex);
 }
 
@@ -156,8 +152,7 @@ static void audio_monitor_removed_signal(void *vptr, calldata_t *calldata)
 
 	audio_monitor_t *am = vptr;
 
-	if (!am)
-		return;
+	if (!am) return;
 
 	audio_monitor_release_obs_source(am);
 }
