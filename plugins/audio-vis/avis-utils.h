@@ -51,6 +51,7 @@ typedef struct mp_float_buffer mp_float_buffer_t;
 
 void avis_draw_bar(uint32_t *pixels, avis_rect_t *bar, avis_rect_t *area,
 	uint32_t color);
+
 void avis_calc_window_coefs(float *buffer, size_t size,
 	enum AUDIO_WINDOW_TYPES window_type);
 
