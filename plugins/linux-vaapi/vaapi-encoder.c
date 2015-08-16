@@ -1201,6 +1201,8 @@ static void dump_encoder_info(vaapi_encoder_t *enc)
 	static const char ZERO_BYTE = '\0';
 	static const char NL_BYTE = '\n';
 
+	da_init(info);
+
 #define PUSHSTR(str) \
 	da_push_back_array(info, str, strlen(str)); \
 	da_push_back(info, &NL_BYTE);
