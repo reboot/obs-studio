@@ -23,6 +23,7 @@
 #include "util/dstr.h"
 #include "util/threading.h"
 #include "util/platform.h"
+#include "util/profiler.h"
 #include "callback/signal.h"
 #include "callback/proc.h"
 
@@ -48,9 +49,30 @@ struct draw_callback {
 };
 
 /* ------------------------------------------------------------------------- */
+/* validity checks */
+
+static inline bool obs_object_valid(const void *obj, const char *f,
+		const char *t)
+{
+	if (!obj) {
+		blog(LOG_DEBUG, "%s: Null '%s' parameter", f, t);
+		return false;
+	}
+
+	return true;
+}
+
+#define obs_ptr_valid(ptr, func) obs_object_valid(ptr, func, #ptr)
+#define obs_source_valid  obs_ptr_valid
+#define obs_output_valid  obs_ptr_valid
+#define obs_encoder_valid obs_ptr_valid
+#define obs_service_valid obs_ptr_valid
+
+/* ------------------------------------------------------------------------- */
 /* modules */
 
 struct obs_module {
+	char *mod_name;
 	const char *file;
 	char *bin_path;
 	char *data_path;
@@ -235,8 +257,6 @@ struct obs_core_video {
 	uint32_t                        base_height;
 	float                           color_matrix[16];
 	enum obs_scale_type             scale_type;
-
-	struct obs_display              main_display;
 };
 
 struct obs_core_audio {
@@ -325,6 +345,9 @@ struct obs_core {
 	proc_handler_t                  *procs;
 
 	char                            *locale;
+	char                            *module_config_path;
+	bool                            name_store_owned;
+	profiler_name_store_t           *name_store;
 
 	/* segmented into multiple sub-structures to keep things a bit more
 	 * clean and organized */
@@ -559,6 +582,20 @@ extern float obs_source_get_target_volume(obs_source_t *source,
 /* ------------------------------------------------------------------------- */
 /* outputs  */
 
+enum delay_msg {
+	DELAY_MSG_PACKET,
+	DELAY_MSG_START,
+	DELAY_MSG_STOP,
+};
+
+struct delay_data {
+	enum delay_msg msg;
+	uint64_t ts;
+	struct encoder_packet packet;
+};
+
+typedef void (*encoded_callback_t)(void *data, struct encoder_packet *packet);
+
 struct obs_weak_output {
 	struct obs_weak_ref ref;
 	struct obs_output *output;
@@ -568,6 +605,9 @@ struct obs_output {
 	struct obs_context_data         context;
 	struct obs_output_info          info;
 	struct obs_weak_output          *control;
+
+	/* indicates ownership of the info.id buffer */
+	bool                            owns_info_id;
 
 	bool                            received_video;
 	bool                            received_audio;
@@ -610,7 +650,34 @@ struct obs_output {
 	struct audio_convert_info       audio_conversion;
 
 	bool                            valid;
+
+	uint64_t                        active_delay_ns;
+	encoded_callback_t              delay_callback;
+	struct circlebuf                delay_data; /* struct delay_data */
+	pthread_mutex_t                 delay_mutex;
+	uint32_t                        delay_sec;
+	uint32_t                        delay_flags;
+	uint32_t                        delay_cur_flags;
+	volatile long                   delay_restart_refs;
+	bool                            delay_active;
+	bool                            delay_capturing;
 };
+
+static inline void do_output_signal(struct obs_output *output,
+		const char *signal)
+{
+	struct calldata params = {0};
+	calldata_set_ptr(&params, "output", output);
+	signal_handler_signal(output->context.signals, signal, &params);
+	calldata_free(&params);
+}
+
+extern void process_delay(void *data, struct encoder_packet *packet);
+extern void obs_output_cleanup_delay(obs_output_t *output);
+extern bool obs_output_delay_start(obs_output_t *output);
+extern void obs_output_delay_stop(obs_output_t *output);
+extern bool obs_output_actual_start(obs_output_t *output);
+extern void obs_output_actual_stop(obs_output_t *output, bool force);
 
 extern const struct obs_output_info *find_output(const char *id);
 
@@ -653,6 +720,9 @@ struct obs_encoder {
 
 	bool                            active;
 
+	/* indicates ownership of the info.id buffer */
+	bool                            owns_info_id;
+
 	uint32_t                        timebase_num;
 	uint32_t                        timebase_den;
 
@@ -679,11 +749,14 @@ struct obs_encoder {
 
 	pthread_mutex_t                 callbacks_mutex;
 	DARRAY(struct encoder_callback) callbacks;
+
+	const char                      *profile_encoder_encode_name;
 };
 
 extern struct obs_encoder_info *find_encoder(const char *id);
 
 extern bool obs_encoder_initialize(obs_encoder_t *encoder);
+extern void obs_encoder_shutdown(obs_encoder_t *encoder);
 
 extern void obs_encoder_start(obs_encoder_t *encoder,
 		void (*new_packet)(void *param, struct encoder_packet *packet),
@@ -711,6 +784,9 @@ struct obs_service {
 	struct obs_context_data         context;
 	struct obs_service_info         info;
 	struct obs_weak_service         *control;
+
+	/* indicates ownership of the info.id buffer */
+	bool                            owns_info_id;
 
 	bool                            active;
 	bool                            destroy;

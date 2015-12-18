@@ -202,12 +202,12 @@ const char *device_preprocessor_name(void)
 	return "_OPENGL";
 }
 
-int device_create(gs_device_t **p_device, const struct gs_init_data *info)
+int device_create(gs_device_t **p_device, uint32_t adapter)
 {
 	struct gs_device *device = bzalloc(sizeof(struct gs_device));
 	int errorcode = GS_ERROR_FAIL;
 
-	device->plat = gl_platform_create(device, info);
+	device->plat = gl_platform_create(device, adapter);
 	if (!device->plat)
 		goto fail;
 
@@ -219,7 +219,7 @@ int device_create(gs_device_t **p_device, const struct gs_init_data *info)
 	gl_enable(GL_CULL_FACE);
 	
 	device_leave_context(device);
-	device->cur_swap = gl_platform_getswap(device->plat);
+	device->cur_swap = NULL;
 
 	*p_device = device;
 	return GS_SUCCESS;
@@ -276,26 +276,46 @@ gs_swapchain_t *device_swapchain_create(gs_device_t *device,
 void device_resize(gs_device_t *device, uint32_t cx, uint32_t cy)
 {
 	/* GL automatically resizes the device, so it doesn't do much */
-	device->cur_swap->info.cx = cx;
-	device->cur_swap->info.cy = cy;
+	if (device->cur_swap) {
+		device->cur_swap->info.cx = cx;
+		device->cur_swap->info.cy = cy;
+	} else {
+		blog(LOG_WARNING, "device_resize (GL): No active swap");
+	}
 
 	gl_update(device);
 }
 
 void device_get_size(const gs_device_t *device, uint32_t *cx, uint32_t *cy)
 {
-	*cx = device->cur_swap->info.cx;
-	*cy = device->cur_swap->info.cy;
+	if (device->cur_swap) {
+		*cx = device->cur_swap->info.cx;
+		*cy = device->cur_swap->info.cy;
+	} else {
+		blog(LOG_WARNING, "device_get_size (GL): No active swap");
+		*cx = 0;
+		*cy = 0;
+	}
 }
 
 uint32_t device_get_width(const gs_device_t *device)
 {
-	return device->cur_swap->info.cx;
+	if (device->cur_swap) {
+		return device->cur_swap->info.cx;
+	} else {
+		blog(LOG_WARNING, "device_get_width (GL): No active swap");
+		return 0;
+	}
 }
 
 uint32_t device_get_height(const gs_device_t *device)
 {
-	return device->cur_swap->info.cy;
+	if (device->cur_swap) {
+		return device->cur_swap->info.cy;
+	} else {
+		blog(LOG_WARNING, "device_get_height (GL): No active swap");
+		return 0;
+	}
 }
 
 gs_texture_t *device_voltexture_create(gs_device_t *device, uint32_t width,
@@ -876,6 +896,11 @@ static inline bool can_render(const gs_device_t *device)
 		return false;
 	}
 
+	if (!device->cur_swap && !device->cur_render_target) {
+		blog(LOG_ERROR, "No active swap chain or render target");
+		return false;
+	}
+
 	return true;
 }
 
@@ -1026,7 +1051,12 @@ void device_clear(gs_device_t *device, uint32_t clear_flags,
 
 void device_flush(gs_device_t *device)
 {
+#ifdef __APPLE__
+	if (!device->cur_swap)
+		glFlush();
+#else
 	glFlush();
+#endif
 
 	UNUSED_PARAMETER(device);
 }
@@ -1329,7 +1359,7 @@ uint32_t gs_voltexture_get_height(const gs_texture_t *voltex)
 	return 0;
 }
 
-uint32_t gs_voltexture_getdepth(const gs_texture_t *voltex)
+uint32_t gs_voltexture_get_depth(const gs_texture_t *voltex)
 {
 	/* TODO */
 	UNUSED_PARAMETER(voltex);

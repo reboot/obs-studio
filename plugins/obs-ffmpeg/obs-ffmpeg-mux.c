@@ -21,6 +21,8 @@
 #include <util/pipe.h>
 #include "ffmpeg-mux/ffmpeg-mux.h"
 
+#include <libavformat/avformat.h>
+
 #define do_log(level, format, ...) \
 	blog(level, "[ffmpeg muxer: '%s'] " format, \
 			obs_output_get_name(stream->output), ##__VA_ARGS__)
@@ -37,8 +39,9 @@ struct ffmpeg_muxer {
 	bool              capturing;
 };
 
-static const char *ffmpeg_mux_getname(void)
+static const char *ffmpeg_mux_getname(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return obs_module_text("FFmpegMuxer");
 }
 
@@ -105,10 +108,55 @@ static void add_audio_encoder_params(struct dstr *cmd, obs_encoder_t *aencoder)
 	dstr_catf(cmd, "\"%s\" %d %d %d ",
 			name.array,
 			bitrate,
-			(int)audio_output_get_sample_rate(audio),
+			(int)obs_encoder_get_sample_rate(aencoder),
 			(int)audio_output_get_channels(audio));
 
 	dstr_free(&name);
+}
+
+static void log_muxer_params(struct ffmpeg_muxer *stream, const char *settings)
+{
+	int ret;
+
+	AVDictionary *dict = NULL;
+	if ((ret = av_dict_parse_string(&dict, settings, "=", " ", 0))) {
+		warn("Failed to parse muxer settings: %s\n%s",
+				av_err2str(ret), settings);
+
+		av_dict_free(&dict);
+		return;
+	}
+
+	if (av_dict_count(dict) > 0) {
+		struct dstr str = {0};
+
+		AVDictionaryEntry *entry = NULL;
+		while ((entry = av_dict_get(dict, "", entry,
+						AV_DICT_IGNORE_SUFFIX)))
+			dstr_catf(&str, "\n\t%s=%s", entry->key, entry->value);
+
+		info("Using muxer settings:%s", str.array);
+		dstr_free(&str);
+	}
+
+	av_dict_free(&dict);
+}
+
+static void add_muxer_params(struct dstr *cmd, struct ffmpeg_muxer *stream)
+{
+	obs_data_t *settings = obs_output_get_settings(stream->output);
+	struct dstr mux = {0};
+
+	dstr_copy(&mux, obs_data_get_string(settings, "muxer_settings"));
+
+	log_muxer_params(stream, mux.array);
+
+	dstr_replace(&mux, "\"", "\\\"");
+	obs_data_release(settings);
+
+	dstr_catf(cmd, "\"%s\" ", mux.array ? mux.array : "");
+
+	dstr_free(&mux);
 }
 
 static void build_command_line(struct ffmpeg_muxer *stream, struct dstr *cmd)
@@ -143,6 +191,8 @@ static void build_command_line(struct ffmpeg_muxer *stream, struct dstr *cmd)
 			add_audio_encoder_params(cmd, aencoders[i]);
 		}
 	}
+
+	add_muxer_params(cmd, stream);
 }
 
 static bool ffmpeg_mux_start(void *data)

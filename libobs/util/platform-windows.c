@@ -18,11 +18,13 @@
 #include <mmsystem.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <intrin.h>
 
 #include "base.h"
 #include "platform.h"
 #include "darray.h"
 #include "dstr.h"
+#include "windows/win-version.h"
 
 #include "../../deps/w32-pthreads/pthread.h"
 
@@ -40,9 +42,9 @@ static inline uint64_t get_clockfreq(void)
 static inline uint32_t get_winver(void)
 {
 	if (!winver) {
-		OSVERSIONINFO osvi;
-		memset(&osvi, 0, sizeof(osvi));
-		winver = (osvi.dwMajorVersion << 16) | (osvi.dwMinorVersion);
+		struct win_version_info ver;
+		get_win_ver(&ver);
+		winver = (ver.major << 16) | ver.minor;
 	}
 
 	return winver;	
@@ -52,19 +54,35 @@ void *os_dlopen(const char *path)
 {
 	struct dstr dll_name;
 	wchar_t *wpath;
+	wchar_t *wpath_slash;
 	HMODULE h_library = NULL;
 
 	if (!path)
 		return NULL;
 
 	dstr_init_copy(&dll_name, path);
+	dstr_replace(&dll_name, "\\", "/");
 	if (!dstr_find(&dll_name, ".dll"))
 		dstr_cat(&dll_name, ".dll");
 
 	os_utf8_to_wcs_ptr(dll_name.array, 0, &wpath);
+
+	/* to make module dependency issues easier to deal with, allow
+	 * dynamically loaded libraries on windows to search for dependent
+	 * libraries that are within the library's own directory */
+	wpath_slash = wcsrchr(wpath, L'/');
+	if (wpath_slash) {
+		*wpath_slash = 0;
+		SetDllDirectoryW(wpath);
+		*wpath_slash = L'/';
+	}
+
 	h_library = LoadLibraryW(wpath);
 	bfree(wpath);
 	dstr_free(&dll_name);
+
+	if (wpath_slash)
+		SetDllDirectoryW(NULL);
 
 	if (!h_library)
 		blog(LOG_INFO, "LoadLibrary failed for '%s', error: %ld",
@@ -160,7 +178,7 @@ bool os_sleepto_ns(uint64_t time_target)
 		if (t >= time_target)
 			return true;
 
-#if 1
+#if 0
 		Sleep(1);
 #else
 		Sleep(0);
@@ -199,6 +217,10 @@ int os_get_config_path(char *dst, size_t size, const char *name)
 			path_utf16);
 
 	if (os_wcs_to_utf8(path_utf16, 0, dst, size) != 0) {
+		if (!name || !*name) {
+			return (int)strlen(dst);
+		}
+
 		if (strcat_s(dst, size, "\\") == 0) {
 			if (strcat_s(dst, size, name) == 0) {
 				return (int)strlen(dst);
@@ -240,6 +262,37 @@ bool os_file_exists(const char *path)
 
 	bfree(path_utf16);
 	return hFind != INVALID_HANDLE_VALUE;
+}
+
+size_t os_get_abs_path(const char *path, char *abspath, size_t size)
+{
+	wchar_t wpath[512];
+	wchar_t wabspath[512];
+	size_t out_len = 0;
+	size_t len;
+
+	if (!abspath)
+		return 0;
+
+	len = os_utf8_to_wcs(path, 0, wpath, 512);
+	if (!len)
+		return 0;
+
+	if (_wfullpath(wabspath, wpath, 512) != NULL)
+		out_len = os_wcs_to_utf8(wabspath, 0, abspath, size);
+	return out_len;
+}
+
+char *os_get_abs_path_ptr(const char *path)
+{
+	char *ptr = bmalloc(512);
+
+	if (!os_get_abs_path(path, ptr, 512)) {
+		bfree(ptr);
+		ptr = NULL;
+	}
+
+	return ptr;
 }
 
 struct os_dir {
@@ -308,6 +361,25 @@ void os_closedir(os_dir_t *dir)
 		FindClose(dir->handle);
 		bfree(dir);
 	}
+}
+
+int64_t os_get_free_space(const char *path)
+{
+	ULARGE_INTEGER  remainingSpace;
+	char            abs_path[512];
+	wchar_t         w_abs_path[512];
+
+	if (os_get_abs_path(path, abs_path, 512) > 0) {
+		if (os_utf8_to_wcs(abs_path, 0, w_abs_path, 512) > 0) {
+			BOOL success = GetDiskFreeSpaceExW(w_abs_path,
+					(PULARGE_INTEGER)&remainingSpace,
+					NULL, NULL);
+			if (success)
+				return (int64_t)remainingSpace.QuadPart;
+		}
+	}
+
+	return -1;
 }
 
 static void make_globent(struct os_globent *ent, WIN32_FIND_DATA *wfd,
@@ -515,4 +587,193 @@ error:
 	bfree(file_in_utf16);
 	bfree(file_out_utf16);
 	return code;
+}
+
+char *os_getcwd(char *path, size_t size)
+{
+	wchar_t *path_w;
+	DWORD len;
+
+	len = GetCurrentDirectoryW(0, NULL);
+	if (!len)
+		return NULL;
+
+	path_w = bmalloc((len + 1) * sizeof(wchar_t));
+	GetCurrentDirectoryW(len + 1, path_w);
+	os_wcs_to_utf8(path_w, (size_t)len, path, size);
+	bfree(path_w);
+
+	return path;
+}
+
+int os_chdir(const char *path)
+{
+	wchar_t *path_w = NULL;
+	size_t size;
+	int ret;
+
+	size = os_utf8_to_wcs_ptr(path, 0, &path_w);
+	if (!path_w)
+		return -1;
+
+	ret = SetCurrentDirectoryW(path_w) ? 0 : -1;
+	bfree(path_w);
+
+	return ret;
+}
+
+typedef DWORD (WINAPI *get_file_version_info_size_w_t)(
+		LPCWSTR module,
+		LPDWORD unused);
+typedef BOOL (WINAPI *get_file_version_info_w_t)(
+		LPCWSTR module,
+		DWORD unused,
+		DWORD len,
+		LPVOID data);
+typedef BOOL (WINAPI *ver_query_value_w_t)(
+		LPVOID data,
+		LPCWSTR subblock,
+		LPVOID *buf,
+		PUINT sizeout);
+
+static get_file_version_info_size_w_t get_file_version_info_size = NULL;
+static get_file_version_info_w_t get_file_version_info = NULL;
+static ver_query_value_w_t ver_query_value = NULL;
+static bool ver_initialized = false;
+static bool ver_initialize_success = false;
+
+static bool initialize_version_functions(void)
+{
+	HMODULE ver = GetModuleHandleW(L"version");
+
+	ver_initialized = true;
+
+	if (!ver) {
+		ver = LoadLibraryW(L"version");
+		if (!ver) {
+			blog(LOG_ERROR, "Failed to load windows "
+					"version library");
+			return false;
+		}
+	}
+
+	get_file_version_info_size = (get_file_version_info_size_w_t)
+		GetProcAddress(ver, "GetFileVersionInfoSizeW");
+	get_file_version_info = (get_file_version_info_w_t)
+		GetProcAddress(ver, "GetFileVersionInfoW");
+	ver_query_value = (ver_query_value_w_t)
+		GetProcAddress(ver, "VerQueryValueW");
+
+	if (!get_file_version_info_size ||
+	    !get_file_version_info ||
+	    !ver_query_value) {
+		blog(LOG_ERROR, "Failed to load windows version "
+				"functions");
+		return false;
+	}
+
+	ver_initialize_success = true;
+	return true;
+}
+
+bool get_dll_ver(const wchar_t *lib, struct win_version_info *ver_info)
+{
+	VS_FIXEDFILEINFO *info = NULL;
+	UINT len = 0;
+	BOOL success;
+	LPVOID data;
+	DWORD size;
+
+	if (!ver_initialized && !initialize_version_functions())
+		return false;
+	if (!ver_initialize_success)
+		return false;
+
+	size = get_file_version_info_size(lib, NULL);
+	if (!size) {
+		blog(LOG_ERROR, "Failed to get windows version info size");
+		return false;
+	}
+
+	data = bmalloc(size);
+	if (!get_file_version_info(L"kernel32", 0, size, data)) {
+		blog(LOG_ERROR, "Failed to get windows version info");
+		bfree(data);
+		return false;
+	}
+
+	success = ver_query_value(data, L"\\", (LPVOID*)&info, &len);
+	if (!success || !info || !len) {
+		blog(LOG_ERROR, "Failed to get windows version info value");
+		bfree(data);
+		return false;
+	}
+
+	ver_info->major = (int)HIWORD(info->dwFileVersionMS);
+	ver_info->minor = (int)LOWORD(info->dwFileVersionMS);
+	ver_info->build = (int)HIWORD(info->dwFileVersionLS);
+	ver_info->revis = (int)LOWORD(info->dwFileVersionLS);
+
+	bfree(data);
+	return true;
+}
+
+void get_win_ver(struct win_version_info *info)
+{
+	static struct win_version_info ver = {0};
+	static bool got_version = false;
+
+	if (!info)
+		return;
+
+	if (!got_version) {
+		get_dll_ver(L"kernel32", &ver);
+		got_version = true;
+	}
+
+	*info = ver;
+}
+
+struct os_inhibit_info {
+	bool active;
+};
+
+os_inhibit_t *os_inhibit_sleep_create(const char *reason)
+{
+	UNUSED_PARAMETER(reason);
+	return bzalloc(sizeof(struct os_inhibit_info));
+}
+
+bool os_inhibit_sleep_set_active(os_inhibit_t *info, bool active)
+{
+	if (!info)
+		return false;
+	if (info->active == active)
+		return false;
+
+	if (active) {
+		SetThreadExecutionState(
+				ES_CONTINUOUS |
+				ES_SYSTEM_REQUIRED |
+				ES_AWAYMODE_REQUIRED |
+				ES_DISPLAY_REQUIRED);
+	} else {
+		SetThreadExecutionState(ES_CONTINUOUS);
+	}
+
+	info->active = active;
+	return true;
+}
+
+void os_inhibit_sleep_destroy(os_inhibit_t *info)
+{
+	if (info) {
+		os_inhibit_sleep_set_active(info, false);
+		bfree(info);
+	}
+}
+
+void os_breakpoint(void)
+{
+	__debugbreak();
 }

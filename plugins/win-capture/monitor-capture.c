@@ -88,8 +88,9 @@ static inline void update_settings(struct monitor_capture *capture,
 
 /* ------------------------------------------------------------------------- */
 
-static const char *monitor_capture_getname(void)
+static const char *monitor_capture_getname(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return TEXT_MONITOR_CAPTURE;
 }
 
@@ -146,7 +147,8 @@ static void monitor_capture_tick(void *data, float seconds)
 static void monitor_capture_render(void *data, gs_effect_t *effect)
 {
 	struct monitor_capture *capture = data;
-	dc_capture_render(&capture->data, obs_get_opaque_effect());
+	dc_capture_render(&capture->data,
+			obs_get_base_effect(OBS_EFFECT_OPAQUE));
 
 	UNUSED_PARAMETER(effect);
 }

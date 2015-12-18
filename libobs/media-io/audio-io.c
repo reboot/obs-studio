@@ -22,9 +22,12 @@
 #include "../util/darray.h"
 #include "../util/circlebuf.h"
 #include "../util/platform.h"
+#include "../util/profiler.h"
 
 #include "audio-io.h"
 #include "audio-resampler.h"
+
+extern profiler_name_store_t *obs_get_profiler_name_store(void);
 
 /* #define DEBUG_AUDIO */
 
@@ -61,6 +64,13 @@ struct audio_line {
 	/* states whether this line is still being used.  if not, then when the
 	 * buffer is depleted, it's destroyed */
 	bool                       alive;
+
+	/* gets set when audio is getting cut off in the front of the buffer */
+	bool                       audio_getting_cut_off;
+
+	/* gets set when audio data is being inserted way outside of bounds of
+	 * the circular buffer */
+	bool                       audio_data_out_of_bounds;
 
 	struct audio_line          **prev_next;
 	struct audio_line          *next;
@@ -134,15 +144,15 @@ static inline double positive_round(double val)
 	return floor(val+0.5);
 }
 
-static size_t ts_diff_frames(const audio_t *audio, uint64_t ts1, uint64_t ts2)
+static int64_t ts_diff_frames(const audio_t *audio, uint64_t ts1, uint64_t ts2)
 {
 	double diff = ts_to_frames(audio, ts1) - ts_to_frames(audio, ts2);
-	return (size_t)positive_round(diff);
+	return (int64_t)positive_round(diff);
 }
 
-static size_t ts_diff_bytes(const audio_t *audio, uint64_t ts1, uint64_t ts2)
+static int64_t ts_diff_bytes(const audio_t *audio, uint64_t ts1, uint64_t ts2)
 {
-	return ts_diff_frames(audio, ts1, ts2) * audio->block_size;
+	return ts_diff_frames(audio, ts1, ts2) * (int64_t)audio->block_size;
 }
 
 /* unless the value is 3+ hours worth of frames, this won't overflow */
@@ -160,7 +170,7 @@ static inline uint64_t conv_frames_to_time(const audio_t *audio,
 static inline void clear_excess_audio_data(struct audio_line *line,
 		uint64_t prev_time)
 {
-	size_t size = ts_diff_bytes(line->audio, prev_time,
+	size_t size = (size_t)ts_diff_bytes(line->audio, prev_time,
 			line->base_timestamp);
 
 	/*blog(LOG_DEBUG, "Excess audio data for audio line '%s', somehow "
@@ -168,6 +178,15 @@ static inline void clear_excess_audio_data(struct audio_line *line,
 	                "prev_time: %"PRIu64", line->base_timestamp: %"PRIu64,
 	                line->name, (uint32_t)size,
 	                prev_time, line->base_timestamp);*/
+
+	if (!line->audio_getting_cut_off) {
+		blog(LOG_WARNING, "Audio line '%s' audio data currently "
+		                  "getting cut off.  This could be due to a "
+		                  "negative sync offset that's larger than "
+		                  "the current audio buffering time.",
+		                  line->name);
+		line->audio_getting_cut_off = true;
+	}
 
 	for (size_t i = 0; i < line->audio->planes; i++) {
 		size_t clear_size = (size < line->buffers[i].size) ?
@@ -229,7 +248,7 @@ static void mix_float(struct audio_output *audio, struct audio_line *line,
 static inline bool mix_audio_line(struct audio_output *audio,
 		struct audio_line *line, size_t size, uint64_t timestamp)
 {
-	size_t time_offset = ts_diff_bytes(audio,
+	size_t time_offset = (size_t)ts_diff_bytes(audio,
 			line->base_timestamp, timestamp);
 	if (time_offset > size)
 		return false;
@@ -370,6 +389,12 @@ static uint64_t mix_and_output(struct audio_output *audio, uint64_t audio_time,
 		if (line->buffers[0].size && line->base_timestamp < prev_time) {
 			clear_excess_audio_data(line, prev_time);
 			line->base_timestamp = prev_time;
+
+		} else if (line->audio_getting_cut_off) {
+			line->audio_getting_cut_off = false;
+			blog(LOG_WARNING, "Audio line '%s' audio data no "
+			                  "longer getting cut off.",
+			                  line->name);
 		}
 
 		if (mix_audio_line(audio, line, bytes, prev_time))
@@ -402,9 +427,14 @@ static void *audio_thread(void *param)
 
 	os_set_thread_name("audio-io: audio thread");
 
+	const char *audio_thread_name =
+		profile_store_name(obs_get_profiler_name_store(),
+				"audio_thread(%s)", audio->info.name);
+	
 	while (os_event_try(audio->stop_event) == EAGAIN) {
 		os_sleep_ms(AUDIO_WAIT_TIME);
 
+		profile_start(audio_thread_name);
 		pthread_mutex_lock(&audio->line_mutex);
 
 		audio_time = os_gettime_ns() - buffer_time;
@@ -412,6 +442,9 @@ static void *audio_thread(void *param)
 		prev_time  = audio_time;
 
 		pthread_mutex_unlock(&audio->line_mutex);
+		profile_end(audio_thread_name);
+
+		profile_reenable_thread();
 	}
 
 	return NULL;
@@ -747,13 +780,18 @@ static inline uint64_t smooth_ts(struct audio_line *line, uint64_t timestamp)
 	return (diff < TS_SMOOTHING_THRESHOLD) ? line->next_ts_min : timestamp;
 }
 
-static void audio_line_place_data(struct audio_line *line,
+static bool audio_line_place_data(struct audio_line *line,
 		const struct audio_data *data)
 {
-	size_t pos;
+	int64_t pos;
 	uint64_t timestamp = smooth_ts(line, data->timestamp);
 
 	pos = ts_diff_bytes(line->audio, timestamp, line->base_timestamp);
+
+	if (pos < 0) {
+		return false;
+	}
+
 	line->next_ts_min =
 		timestamp + conv_frames_to_time(line->audio, data->frames);
 
@@ -765,7 +803,8 @@ static void audio_line_place_data(struct audio_line *line,
 			line->buffers[0].size);
 #endif
 
-	audio_line_place_data_pos(line, data, pos);
+	audio_line_place_data_pos(line, data, (size_t)pos);
+	return true;
 }
 
 #define MAX_DELAY_NS 6000000000ULL
@@ -781,6 +820,8 @@ static inline bool valid_timestamp_range(struct audio_line *line, uint64_t ts)
 
 void audio_line_output(audio_line_t *line, const struct audio_data *data)
 {
+	bool inserted_audio = false;
+
 	if (!line || !data) return;
 
 	pthread_mutex_lock(&line->mutex);
@@ -788,18 +829,33 @@ void audio_line_output(audio_line_t *line, const struct audio_data *data)
 	if (!line->buffers[0].size) {
 		line->base_timestamp = data->timestamp -
 		                       line->audio->info.buffer_ms * 1000000;
-		audio_line_place_data(line, data);
+		inserted_audio = audio_line_place_data(line, data);
 
 	} else if (valid_timestamp_range(line, data->timestamp)) {
-		audio_line_place_data(line, data);
+		inserted_audio = audio_line_place_data(line, data);
+	}
 
-	} else {
-		blog(LOG_DEBUG, "Bad timestamp for audio line '%s', "
+	if (!inserted_audio) {
+		if (!line->audio_data_out_of_bounds) {
+			blog(LOG_WARNING, "Audio line '%s' currently "
+			                  "receiving out of bounds audio "
+			                  "data.  This can sometimes happen "
+			                  "if there's a pause in the thread.",
+			                  line->name);
+			line->audio_data_out_of_bounds = true;
+		}
+
+		/*blog(LOG_DEBUG, "Bad timestamp for audio line '%s', "
 		                "data->timestamp: %"PRIu64", "
 		                "line->base_timestamp: %"PRIu64".  This can "
 		                "sometimes happen when there's a pause in "
 		                "the threads.", line->name, data->timestamp,
-		                line->base_timestamp);
+		                line->base_timestamp);*/
+
+	} else if (line->audio_data_out_of_bounds) {
+		blog(LOG_WARNING, "Audio line '%s' no longer receiving "
+		                  "out of bounds audio data.", line->name);
+		line->audio_data_out_of_bounds = false;
 	}
 
 	pthread_mutex_unlock(&line->mutex);

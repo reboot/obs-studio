@@ -20,8 +20,11 @@
 #include <QApplication>
 #include <QTranslator>
 #include <QPointer>
+#include <obs.hpp>
 #include <util/lexer.h>
+#include <util/profiler.h>
 #include <util/util.hpp>
+#include <util/platform.h>
 #include <string>
 #include <memory>
 #include <vector>
@@ -30,7 +33,7 @@
 
 std::string CurrentTimeString();
 std::string CurrentDateTimeString();
-std::string GenerateTimeDateFilename(const char *extension);
+std::string GenerateTimeDateFilename(const char *extension, bool noSpace=false);
 QObject *CreateShortcutFilter();
 
 struct BaseLexer {
@@ -59,7 +62,12 @@ private:
 	std::string		       theme;
 	ConfigFile                     globalConfig;
 	TextLookup                     textLookup;
+	OBSContext                     obsContext;
 	QPointer<OBSMainWindow>        mainWindow;
+	profiler_name_store_t          *profilerNameStore = nullptr;
+
+	os_inhibit_t                   *sleepInhibitor = nullptr;
+	int                            sleepInhibitRefs = 0;
 
 	bool InitGlobalConfig();
 	bool InitGlobalConfigDefaults();
@@ -67,7 +75,8 @@ private:
 	bool InitTheme();
 
 public:
-	OBSApp(int &argc, char **argv);
+	OBSApp(int &argc, char **argv, profiler_name_store_t *store);
+	~OBSApp();
 
 	void AppInit();
 	bool OBSInit();
@@ -91,6 +100,11 @@ public:
 		return textLookup.GetString(lookupVal);
 	}
 
+	profiler_name_store_t *GetProfilerNameStore() const
+	{
+		return profilerNameStore;
+	}
+
 	const char *GetLastLog() const;
 	const char *GetCurrentLog() const;
 
@@ -100,6 +114,21 @@ public:
 	const char *OutputAudioSource() const;
 
 	const char *GetRenderModule() const;
+
+	inline void IncrementSleepInhibition()
+	{
+		if (!sleepInhibitor) return;
+		if (sleepInhibitRefs++ == 0)
+			os_inhibit_sleep_set_active(sleepInhibitor, true);
+	}
+
+	inline void DecrementSleepInhibition()
+	{
+		if (!sleepInhibitor) return;
+		if (sleepInhibitRefs == 0) return;
+		if (--sleepInhibitRefs == 0)
+			os_inhibit_sleep_set_active(sleepInhibitor, false);
+	}
 };
 
 int GetConfigPath(char *path, size_t size, const char *name);

@@ -18,10 +18,14 @@
 #include <time.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <chrono>
+#include <ratio>
 #include <sstream>
+#include <mutex>
 #include <util/bmem.h>
 #include <util/dstr.h>
 #include <util/platform.h>
+#include <util/profiler.hpp>
 #include <obs-config.h>
 #include <obs.hpp>
 
@@ -36,6 +40,8 @@
 #include "platform.hpp"
 
 #include <fstream>
+
+#include <curl/curl.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -167,11 +173,27 @@ QObject *CreateShortcutFilter()
 
 string CurrentTimeString()
 {
-	time_t     now = time(0);
+	using namespace std::chrono;
+
 	struct tm  tstruct;
 	char       buf[80];
+
+	auto tp = system_clock::now();
+	auto now = system_clock::to_time_t(tp);
 	tstruct = *localtime(&now);
-	strftime(buf, sizeof(buf), "%X", &tstruct);
+
+	size_t written = strftime(buf, sizeof(buf), "%X", &tstruct);
+	if (ratio_less<system_clock::period, seconds::period>::value &&
+			written && (sizeof(buf) - written) > 5) {
+		auto tp_secs =
+			time_point_cast<seconds>(tp);
+		auto millis  =
+			duration_cast<milliseconds>(tp - tp_secs).count();
+
+		snprintf(buf + written, sizeof(buf) - written, ".%03u",
+				static_cast<unsigned>(millis));
+	}
+
 	return buf;
 }
 
@@ -183,6 +205,84 @@ string CurrentDateTimeString()
 	tstruct = *localtime(&now);
 	strftime(buf, sizeof(buf), "%Y-%m-%d, %X", &tstruct);
 	return buf;
+}
+
+static inline void LogString(fstream &logFile, const char *timeString,
+		char *str)
+{
+	logFile << timeString << str << endl;
+}
+
+static inline void LogStringChunk(fstream &logFile, char *str)
+{
+	char *nextLine = str;
+	string timeString = CurrentTimeString();
+	timeString += ": ";
+
+	while (*nextLine) {
+		char *nextLine = strchr(str, '\n');
+		if (!nextLine)
+			break;
+
+		if (nextLine != str && nextLine[-1] == '\r') {
+			nextLine[-1] = 0;
+		} else {
+			nextLine[0] = 0;
+		}
+
+		LogString(logFile, timeString.c_str(), str);
+		nextLine++;
+		str = nextLine;
+	}
+
+	LogString(logFile, timeString.c_str(), str);
+}
+
+#define MAX_REPEATED_LINES 30
+#define MAX_CHAR_VARIATION (255 * 3)
+
+static inline int sum_chars(const char *str)
+{
+	int val = 0;
+	for (; *str != 0; str++)
+		val += *str;
+
+	return val;
+}
+
+static inline bool too_many_repeated_entries(fstream &logFile, const char *msg,
+		const char *output_str)
+{
+	static mutex log_mutex;
+	static const char *last_msg_ptr = nullptr;
+	static int last_char_sum = 0;
+	static char cmp_str[4096];
+	static int rep_count = 0;
+
+	int new_sum = sum_chars(output_str);
+
+	lock_guard<mutex> guard(log_mutex);
+
+	if (last_msg_ptr == msg) {
+		int diff = std::abs(new_sum - last_char_sum);
+		if (diff < MAX_CHAR_VARIATION) {
+			return (rep_count++ >= MAX_REPEATED_LINES);
+		}
+	}
+
+	if (rep_count > MAX_REPEATED_LINES) {
+		logFile << CurrentTimeString() <<
+			": Last log entry repeated for " <<
+			to_string(rep_count - MAX_REPEATED_LINES) <<
+			" more lines" << endl;
+	}
+
+	last_msg_ptr = msg;
+	strcpy(cmp_str, output_str);
+	last_char_sum = new_sum;
+	rep_count = 0;
+
+	return false;
 }
 
 static void do_log(int log_level, const char *msg, va_list args, void *param)
@@ -204,8 +304,11 @@ static void do_log(int log_level, const char *msg, va_list args, void *param)
 	def_log_handler(log_level, msg, args2, nullptr);
 #endif
 
+	if (too_many_repeated_entries(logFile, msg, str))
+		return;
+
 	if (log_level <= LOG_INFO)
-		logFile << CurrentTimeString() << ": " << str << endl;
+		LogStringChunk(logFile, str);
 
 #ifdef _WIN32
 	if (log_level <= LOG_ERROR && IsDebuggerPresent())
@@ -235,7 +338,7 @@ bool OBSApp::InitGlobalConfigDefaults()
 
 static bool do_mkdir(const char *path)
 {
-	if (os_mkdir(path) == MKDIR_ERROR) {
+	if (os_mkdirs(path) == MKDIR_ERROR) {
 		OBSErrorBox(NULL, "Failed to create directory %s", path);
 		return false;
 	}
@@ -247,18 +350,6 @@ static bool MakeUserDirs()
 {
 	char path[512];
 
-	if (portable_mode) {
-		if (GetConfigPath(path, sizeof(path), "") <= 0)
-			return false;
-		if (!do_mkdir(path))
-			return false;
-	}
-
-	if (GetConfigPath(path, sizeof(path), "obs-studio") <= 0)
-		return false;
-	if (!do_mkdir(path))
-		return false;
-
 	if (GetConfigPath(path, sizeof(path), "obs-studio/basic") <= 0)
 		return false;
 	if (!do_mkdir(path))
@@ -268,12 +359,22 @@ static bool MakeUserDirs()
 		return false;
 	if (!do_mkdir(path))
 		return false;
+
+	if (GetConfigPath(path, sizeof(path), "obs-studio/profiler_data") <= 0)
+		return false;
+	if (!do_mkdir(path))
+		return false;
+
 #ifdef _WIN32
 	if (GetConfigPath(path, sizeof(path), "obs-studio/crashes") <= 0)
 		return false;
 	if (!do_mkdir(path))
 		return false;
 #endif
+	if (GetConfigPath(path, sizeof(path), "obs-studio/plugin_config") <= 0)
+		return false;
+	if (!do_mkdir(path))
+		return false;
 
 	return true;
 }
@@ -316,6 +417,7 @@ bool OBSApp::InitGlobalConfig()
 
 bool OBSApp::InitLocale()
 {
+	ProfileScope("OBSApp::InitLocale");
 	const char *lang = config_get_string(globalConfig, "General",
 			"Language");
 
@@ -419,9 +521,18 @@ bool OBSApp::InitTheme()
 	return SetTheme(t.str());
 }
 
-OBSApp::OBSApp(int &argc, char **argv)
-	: QApplication(argc, argv)
-{}
+OBSApp::OBSApp(int &argc, char **argv, profiler_name_store_t *store)
+	: QApplication(argc, argv),
+	  profilerNameStore(store)
+{
+	sleepInhibitor = os_inhibit_sleep_create("OBS Video/audio");
+}
+
+OBSApp::~OBSApp()
+{
+	os_inhibit_sleep_set_active(sleepInhibitor, false);
+	os_inhibit_sleep_destroy(sleepInhibitor);
+}
 
 static void move_basic_to_profiles(void)
 {
@@ -506,6 +617,8 @@ static void move_basic_to_scene_collections(void)
 
 void OBSApp::AppInit()
 {
+	ProfileScope("OBSApp::AppInit");
+
 	if (!InitApplicationBundle())
 		throw "Failed to initialize application bundle";
 	if (!MakeUserDirs())
@@ -542,8 +655,20 @@ const char *OBSApp::GetRenderModule() const
 		DL_D3D11 : DL_OPENGL;
 }
 
+static bool StartupOBS(const char *locale, profiler_name_store_t *store)
+{
+	char path[512];
+
+	if (GetConfigPath(path, sizeof(path), "obs-studio/plugin_config") <= 0)
+		return false;
+
+	return obs_startup(locale, path, store);
+}
+
 bool OBSApp::OBSInit()
 {
+	ProfileScope("OBSApp::OBSInit");
+
 	bool licenseAccepted = config_get_bool(globalConfig, "General",
 			"LicenseAccepted");
 	OBSLicenseAgreement agreement(nullptr);
@@ -554,6 +679,9 @@ bool OBSApp::OBSInit()
 					"LicenseAccepted", true);
 			config_save(globalConfig);
 		}
+
+		if (!StartupOBS(locale.c_str(), GetProfilerNameStore()))
+			return false;
 
 		mainWindow = new OBSBasic();
 
@@ -761,17 +889,18 @@ static void get_last_log(void)
 	}
 }
 
-string GenerateTimeDateFilename(const char *extension)
+string GenerateTimeDateFilename(const char *extension, bool noSpace)
 {
 	time_t    now = time(0);
 	char      file[256] = {};
 	struct tm *cur_time;
 
 	cur_time = localtime(&now);
-	snprintf(file, sizeof(file), "%d-%02d-%02d %02d-%02d-%02d.%s",
+	snprintf(file, sizeof(file), "%d-%02d-%02d%c%02d-%02d-%02d.%s",
 			cur_time->tm_year+1900,
 			cur_time->tm_mon+1,
 			cur_time->tm_mday,
+			noSpace ? '_' : ' ',
 			cur_time->tm_hour,
 			cur_time->tm_min,
 			cur_time->tm_sec,
@@ -824,22 +953,120 @@ static void create_log_file(fstream &logFile)
 	}
 }
 
+static auto ProfilerNameStoreRelease = [](profiler_name_store_t *store)
+{
+	profiler_name_store_free(store);
+};
+
+using ProfilerNameStore =
+	std::unique_ptr<profiler_name_store_t,
+			decltype(ProfilerNameStoreRelease)>;
+
+ProfilerNameStore CreateNameStore()
+{
+	return ProfilerNameStore{profiler_name_store_create(),
+					ProfilerNameStoreRelease};
+}
+
+static auto SnapshotRelease = [](profiler_snapshot_t *snap)
+{
+	profile_snapshot_free(snap);
+};
+
+using ProfilerSnapshot = 
+	std::unique_ptr<profiler_snapshot_t, decltype(SnapshotRelease)>;
+
+ProfilerSnapshot GetSnapshot()
+{
+	return ProfilerSnapshot{profile_snapshot_create(), SnapshotRelease};
+}
+
+static void SaveProfilerData(const ProfilerSnapshot &snap)
+{
+	if (currentLogFile.empty())
+		return;
+
+	auto pos = currentLogFile.rfind('.');
+	if (pos == currentLogFile.npos)
+		return;
+
+#define LITERAL_SIZE(x) x, (sizeof(x) - 1)
+	ostringstream dst;
+	dst.write(LITERAL_SIZE("obs-studio/profiler_data/"));
+	dst.write(currentLogFile.c_str(), pos);
+	dst.write(LITERAL_SIZE(".csv.gz"));
+#undef LITERAL_SIZE
+
+	BPtr<char> path = GetConfigPathPtr(dst.str().c_str());
+	if (!profiler_snapshot_dump_csv_gz(snap.get(), path))
+		blog(LOG_WARNING, "Could not save profiler data to '%s'",
+				static_cast<const char*>(path));
+}
+
+static auto ProfilerFree = [](void *)
+{
+	profiler_stop();
+
+	auto snap = GetSnapshot();
+
+	profiler_print(snap.get());
+	profiler_print_time_between_calls(snap.get());
+
+	SaveProfilerData(snap);
+
+	profiler_free();
+};
+
+static const char *run_program_init = "run_program_init";
 static int run_program(fstream &logFile, int argc, char *argv[])
 {
 	int ret = -1;
+
+	auto profilerNameStore = CreateNameStore();
+
+	std::unique_ptr<void, decltype(ProfilerFree)>
+		prof_release(static_cast<void*>(&ProfilerFree),
+				ProfilerFree);
+
+	profiler_start();
+	profile_register_root(run_program_init, 0);
+
+	auto PrintInitProfile = [&]()
+	{
+		auto snap = GetSnapshot();
+
+		profiler_snapshot_filter_roots(snap.get(), [](void *data,
+					const char *name, bool *remove)
+		{
+			*remove = (*static_cast<const char**>(data)) != name;
+			return true;
+		}, static_cast<void*>(&run_program_init));
+
+		profiler_print(snap.get());
+	};
+
+	ScopeProfiler prof{run_program_init};
+
 	QCoreApplication::addLibraryPath(".");
 
-	OBSApp program(argc, argv);
+	OBSApp program(argc, argv, profilerNameStore.get());
 	try {
 		program.AppInit();
 
 		OBSTranslator translator;
 
 		create_log_file(logFile);
+		delete_oldest_file("obs-studio/profiler_data");
 
 		program.installTranslator(&translator);
 
-		ret = program.OBSInit() ? program.exec() : 0;
+		if (!program.OBSInit())
+			return 0;
+
+		prof.Stop();
+		PrintInitProfile();
+
+		return program.exec();
 
 	} catch (const char *error) {
 		blog(LOG_ERROR, "%s", error);
@@ -1027,6 +1254,169 @@ static inline bool arg_is(const char *arg,
 	       (short_form && strcmp(arg, short_form) == 0);
 }
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+#define IS_UNIX 1
+#endif
+
+/* if using XDG and was previously using an older build of OBS, move config
+ * files to XDG directory */
+#if defined(USE_XDG) && defined(IS_UNIX)
+static void move_to_xdg(void)
+{
+	char old_path[512];
+	char new_path[512];
+	char *home = getenv("HOME");
+	if (!home)
+		return;
+
+	if (snprintf(old_path, 512, "%s/.obs-studio", home) <= 0)
+		return;
+
+	/* make base xdg path if it doesn't already exist */
+	if (GetConfigPath(new_path, 512, "") <= 0)
+		return;
+	if (os_mkdirs(new_path) == MKDIR_ERROR)
+		return;
+
+	if (GetConfigPath(new_path, 512, "obs-studio") <= 0)
+		return;
+
+	if (os_file_exists(old_path) && !os_file_exists(new_path)) {
+		rename(old_path, new_path);
+	}
+}
+#endif
+
+static bool update_ffmpeg_output(ConfigFile &config)
+{
+	if (config_has_user_value(config, "AdvOut", "FFOutputToFile"))
+		return false;
+
+	const char *url = config_get_string(config, "AdvOut", "FFURL");
+	if (!url)
+		return false;
+
+	bool isActualURL = strstr(url, "://") != nullptr;
+	if (isActualURL)
+		return false;
+
+	string urlStr = url;
+	string extension;
+
+	for (size_t i = urlStr.length(); i > 0; i--) {
+		size_t idx = i - 1;
+
+		if (urlStr[idx] == '.') {
+			extension = &urlStr[i];
+		}
+
+		if (urlStr[idx] == '\\' || urlStr[idx] == '/') {
+			urlStr[idx] = 0;
+			break;
+		}
+	}
+
+	if (urlStr.empty() || extension.empty())
+		return false;
+
+	config_remove_value(config, "AdvOut", "FFURL");
+	config_set_string(config, "AdvOut", "FFFilePath", urlStr.c_str());
+	config_set_string(config, "AdvOut", "FFExtension", extension.c_str());
+	config_set_bool(config, "AdvOut", "FFOutputToFile", true);
+	return true;
+}
+
+static bool move_reconnect_settings(ConfigFile &config, const char *sec)
+{
+	bool changed = false;
+
+	if (config_has_user_value(config, sec, "Reconnect")) {
+		bool reconnect = config_get_bool(config, sec, "Reconnect");
+		config_set_bool(config, "Output", "Reconnect", reconnect);
+		changed = true;
+	}
+	if (config_has_user_value(config, sec, "RetryDelay")) {
+		int delay = (int)config_get_uint(config, sec, "RetryDelay");
+		config_set_uint(config, "Output", "RetryDelay", delay);
+		changed = true;
+	}
+	if (config_has_user_value(config, sec, "MaxRetries")) {
+		int retries = (int)config_get_uint(config, sec, "MaxRetries");
+		config_set_uint(config, "Output", "MaxRetries", retries);
+		changed = true;
+	}
+
+	return changed;
+}
+
+static bool update_reconnect(ConfigFile &config)
+{
+	if (!config_has_user_value(config, "Output", "Mode"))
+		return false;
+
+	const char *mode = config_get_string(config, "Output", "Mode");
+	if (!mode)
+		return false;
+
+	const char *section = (strcmp(mode, "Advanced") == 0) ?
+		"AdvOut" : "SimpleOutput";
+
+	if (move_reconnect_settings(config, section)) {
+		config_remove_value(config, "SimpleOutput", "Reconnect");
+		config_remove_value(config, "SimpleOutput", "RetryDelay");
+		config_remove_value(config, "SimpleOutput", "MaxRetries");
+		config_remove_value(config, "AdvOut", "Reconnect");
+		config_remove_value(config, "AdvOut", "RetryDelay");
+		config_remove_value(config, "AdvOut", "MaxRetries");
+		return true;
+	}
+
+	return false;
+}
+
+static void upgrade_settings(void)
+{
+	char path[512];
+	int pathlen = GetConfigPath(path, 512, "obs-studio/basic/profiles");
+
+	if (pathlen <= 0)
+		return;
+	if (!os_file_exists(path))
+		return;
+
+	os_dir_t *dir = os_opendir(path);
+	if (!dir)
+		return;
+
+	struct os_dirent *ent = os_readdir(dir);
+
+	while (ent) {
+		if (ent->directory) {
+			strcat(path, "/");
+			strcat(path, ent->d_name);
+			strcat(path, "/basic.ini");
+
+			ConfigFile config;
+			int ret;
+
+			ret = config.Open(path, CONFIG_OPEN_EXISTING);
+			if (ret == CONFIG_SUCCESS) {
+				if (update_ffmpeg_output(config) ||
+				    update_reconnect(config)) {
+					config_save_safe(config, "tmp",
+							nullptr);
+				}
+			}
+
+			path[pathlen] = 0;
+		}
+
+		ent = os_readdir(dir);
+	}
+
+	os_closedir(dir);
+}
+
 int main(int argc, char *argv[])
 {
 #ifndef _WIN32
@@ -1039,6 +1429,10 @@ int main(int argc, char *argv[])
 #endif
 
 	base_get_log_handler(&def_log_handler, nullptr);
+
+#if defined(USE_XDG) && defined(IS_UNIX)
+	move_to_xdg();
+#endif
 
 	for (int i = 1; i < argc; i++) {
 		if (arg_is(argv[i], "--portable", "-p")) {
@@ -1056,8 +1450,11 @@ int main(int argc, char *argv[])
 	}
 #endif
 
+	upgrade_settings();
+
 	fstream logFile;
 
+	curl_global_init(CURL_GLOBAL_ALL);
 	int ret = run_program(logFile, argc, argv);
 
 	blog(LOG_INFO, "Number of memory leaks: %ld", bnum_allocs());

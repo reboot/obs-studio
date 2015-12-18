@@ -10,7 +10,11 @@ else()
 	set(FIND_MODE QUIET)
 endif()
 
-if(DEFINED ENV{QTDIR${_lib_suffix}})
+if(DEFINED QTDIR${_lib_suffix})
+	list(APPEND CMAKE_PREFIX_PATH "${QTDIR${_lib_suffix}}")
+elseif(DEFINED QTDIR)
+	list(APPEND CMAKE_PREFIX_PATH "${QTDIR}")
+elseif(DEFINED ENV{QTDIR${_lib_suffix}})
 	list(APPEND CMAKE_PREFIX_PATH "$ENV{QTDIR${_lib_suffix}}")
 elseif(DEFINED ENV{QTDIR})
 	list(APPEND CMAKE_PREFIX_PATH "$ENV{QTDIR}")
@@ -122,6 +126,7 @@ set(obs_SOURCES
 	visibility-item-widget.cpp
 	slider-absoluteset-style.cpp
 	source-list-widget.cpp
+	qt-display.cpp
 	crash-report.cpp
 	hotkey-edit.cpp
 	source-label.cpp
@@ -150,6 +155,7 @@ set(obs_HEADERS
 	window-projector.hpp
 	window-remux.hpp
 	properties-view.hpp
+	properties-view.moc.hpp
 	display-helpers.hpp
 	double-slider.hpp
 	focus-list.hpp
@@ -180,7 +186,6 @@ set(obs_UI
 	forms/OBSBasicSettings.ui
 	forms/OBSBasicSourceSelect.ui
 	forms/OBSBasicInteraction.ui
-	forms/OBSBasicProperties.ui
 	forms/OBSRemux.ui)
 
 set(obs_QRC

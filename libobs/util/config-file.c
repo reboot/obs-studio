@@ -14,6 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <wchar.h>
 #include "config-file.h"
@@ -69,6 +70,7 @@ config_t *config_create(const char *file)
 	fclose(f);
 
 	config = bzalloc(sizeof(struct config_data));
+	config->file = bstrdup(file);
 	return config;
 }
 
@@ -115,15 +117,42 @@ static bool config_parse_string(struct lexer *lex, struct strref *ref,
 	return success;
 }
 
+static void unescape(struct dstr *str)
+{
+	char *read = str->array;
+	char *write = str->array;
+
+	for (; *read; read++, write++) {
+		char cur = *read;
+		if (cur == '\\') {
+			char next = read[1];
+			if (next == '\\') {
+				read++;
+			} else if (next == 'r') {
+				cur = '\r';
+				read++;
+			} else if (next =='n') {
+				cur = '\n';
+				read++;
+			}
+		}
+
+		if (read != write)
+			*write = cur;
+	}
+
+	if (read != write)
+		*write = '\0';
+}
+
 static void config_add_item(struct darray *items, struct strref *name,
 		struct strref *value)
 {
 	struct config_item item;
 	struct dstr item_value;
 	dstr_init_copy_strref(&item_value, value);
-	dstr_replace(&item_value, "\\n", "\n");
-	dstr_replace(&item_value, "\\r", "\r");
-	dstr_replace(&item_value, "\\\\", "\\");
+
+	unescape(&item_value);
 
 	item.name  = bstrdup_n(name->array,  name->len);
 	item.value = item_value.array;
@@ -348,6 +377,53 @@ int config_save(config_t *config)
 	return CONFIG_SUCCESS;
 }
 
+int config_save_safe(config_t *config, const char *temp_ext,
+		const char *backup_ext)
+{
+	struct dstr temp_file = {0};
+	struct dstr backup_file = {0};
+	char *file = config->file;
+	int ret;
+
+	if (!temp_ext || !*temp_ext) {
+		blog(LOG_ERROR, "config_save_safe: invalid "
+		                "temporary extension specified");
+		return CONFIG_ERROR;
+	}
+
+	dstr_copy(&temp_file, config->file);
+	if (*temp_ext != '.')
+		dstr_cat(&temp_file, ".");
+	dstr_cat(&temp_file, temp_ext);
+
+	config->file = temp_file.array;
+	ret = config_save(config);
+	config->file = file;
+
+	if (ret != CONFIG_SUCCESS) {
+		goto cleanup;
+	}
+
+	if (backup_ext && *backup_ext) {
+		dstr_copy(&backup_file, config->file);
+		if (*backup_ext != '.')
+			dstr_cat(&backup_file, ".");
+		dstr_cat(&backup_file, backup_ext);
+
+		os_unlink(backup_file.array);
+		os_rename(file, backup_file.array);
+	} else {
+		os_unlink(file);
+	}
+
+	os_rename(temp_file.array, file);
+
+cleanup:
+	dstr_free(&temp_file);
+	dstr_free(&backup_file);
+	return ret;
+}
+
 void config_close(config_t *config)
 {
 	struct config_section *defaults, *sections;
@@ -463,7 +539,7 @@ void config_set_int(config_t *config, const char *section,
 {
 	struct dstr str;
 	dstr_init(&str);
-	dstr_printf(&str, "%lld", value);
+	dstr_printf(&str, "%"PRId64, value);
 	config_set_item(&config->sections, section, name, str.array);
 }
 
@@ -472,7 +548,7 @@ void config_set_uint(config_t *config, const char *section,
 {
 	struct dstr str;
 	dstr_init(&str);
-	dstr_printf(&str, "%llu", value);
+	dstr_printf(&str, "%"PRIu64, value);
 	config_set_item(&config->sections, section, name, str.array);
 }
 
@@ -504,7 +580,7 @@ void config_set_default_int(config_t *config, const char *section,
 {
 	struct dstr str;
 	dstr_init(&str);
-	dstr_printf(&str, "%lld", value);
+	dstr_printf(&str, "%"PRId64, value);
 	config_set_item(&config->defaults, section, name, str.array);
 }
 
@@ -513,7 +589,7 @@ void config_set_default_uint(config_t *config, const char *section,
 {
 	struct dstr str;
 	dstr_init(&str);
-	dstr_printf(&str, "%llu", value);
+	dstr_printf(&str, "%"PRIu64, value);
 	config_set_item(&config->defaults, section, name, str.array);
 }
 

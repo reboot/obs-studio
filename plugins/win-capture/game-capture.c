@@ -494,8 +494,16 @@ static inline void reset_frame_interval(struct game_capture *gc)
 	struct obs_video_info ovi;
 	uint64_t interval = 0;
 
-	if (gc->config.limit_framerate && obs_get_video_info(&ovi))
+	if (obs_get_video_info(&ovi)) {
 		interval = ovi.fps_den * 1000000000ULL / ovi.fps_num;
+
+		/* Always limit capture framerate to some extent.  If a game
+		 * running at 900 FPS is being captured without some sort of
+		 * limited capture interval, it will dramatically reduce
+		 * performance. */
+		if (!gc->config.limit_framerate)
+			interval /= 2;
+	}
 
 	gc->global_hook_info->frame_interval = interval;
 }
@@ -560,7 +568,7 @@ static inline bool init_pipe(struct game_capture *gc)
 	return true;
 }
 
-static inline bool inject_library(HANDLE process, const wchar_t *dll)
+static inline int inject_library(HANDLE process, const wchar_t *dll)
 {
 	return inject_library_obf(process, dll,
 			"D|hkqkW`kl{k\\osofj", 0xa178ef3655e5ade7,
@@ -604,7 +612,7 @@ static inline bool hook_direct(struct game_capture *gc,
 	CloseHandle(process);
 
 	if (ret != 0) {
-		warn("hook_direct: inject failed: %ld", ret);
+		warn("hook_direct: inject failed: %d", ret);
 		return false;
 	}
 
@@ -1274,6 +1282,11 @@ static void game_capture_tick(void *data, float seconds)
 	gc->retry_time += seconds;
 
 	if (!gc->active) {
+		if (!obs_source_showing(gc->source)) {
+			gc->retry_time = 0.0f;
+			return;
+		}
+
 		if (!gc->error_acquiring &&
 		    gc->retry_time > gc->retry_interval) {
 			if (gc->config.capture_any_fullscreen ||
@@ -1336,8 +1349,8 @@ static void game_capture_render(void *data, gs_effect_t *effect)
 	if (!gc->texture)
 		return;
 
-	effect = gc->config.allow_transparency ?
-		obs_get_default_effect() : obs_get_opaque_effect();
+	effect = obs_get_base_effect(gc->config.allow_transparency ?
+			OBS_EFFECT_DEFAULT : OBS_EFFECT_OPAQUE);
 
 	while (gs_effect_loop(effect, "Draw")) {
 		obs_source_draw(gc->texture, 0, 0, 0, 0,
@@ -1349,7 +1362,7 @@ static void game_capture_render(void *data, gs_effect_t *effect)
 	}
 
 	if (!gc->config.allow_transparency && gc->config.cursor) {
-		effect = obs_get_default_effect();
+		effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
 
 		while (gs_effect_loop(effect, "Draw")) {
 			game_capture_render_cursor(gc);
@@ -1369,8 +1382,9 @@ static uint32_t game_capture_height(void *data)
 	return gc->active ? gc->global_hook_info->cy : 0;
 }
 
-static const char *game_capture_name(void)
+static const char *game_capture_name(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return TEXT_GAME_CAPTURE;
 }
 

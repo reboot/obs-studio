@@ -62,11 +62,15 @@ file(GLOB FFMPEG_BIN_FILES
 	"${FFMPEG_avcodec_INCLUDE_DIR}/bin/libopus*.dll"
 	"${FFMPEG_avcodec_INCLUDE_DIR}/bin/opus*.dll"
 
+	"${FFMPEG_avcodec_INCLUDE_DIR}/../bin/libogg*.dll"
+	"${FFMPEG_avcodec_INCLUDE_DIR}/../bin/libvorbis*.dll"
+	"${FFMPEG_avcodec_INCLUDE_DIR}/bin/libogg*.dll"
+	"${FFMPEG_avcodec_INCLUDE_DIR}/bin/libvorbis*.dll"
+
 	"${FFMPEG_avcodec_INCLUDE_DIR}/../bin${_bin_suffix}/libopus*.dll"
 	"${FFMPEG_avcodec_INCLUDE_DIR}/../bin${_bin_suffix}/opus*.dll"
 	"${FFMPEG_avcodec_INCLUDE_DIR}/bin${_bin_suffix}/libopus*.dll"
 	"${FFMPEG_avcodec_INCLUDE_DIR}/bin${_bin_suffix}/opus*.dll"
-
 	"${FFMPEG_avcodec_INCLUDE_DIR}/../bin/libbz2*.dll"
 	"${FFMPEG_avcodec_INCLUDE_DIR}/../bin/zlib*.dll"
 	"${FFMPEG_avcodec_INCLUDE_DIR}/bin/libbz2*.dll"
@@ -110,6 +114,21 @@ file(GLOB CURL_BIN_FILES
 	"${CURL_INCLUDE_DIR}/bin/curl*.dll"
 	)
 
+if (ZLIB_LIB)
+	GET_FILENAME_COMPONENT(ZLIB_BIN_PATH ${ZLIB_LIB} PATH)
+endif()
+file(GLOB ZLIB_BIN_FILES
+	"${ZLIB_BIN_PATH}/zlib*.dll")
+
+if (NOT ZLIB_BIN_FILES)
+	file(GLOB ZLIB_BIN_FILES
+		"${ZLIB_INCLUDE_DIR}/../bin${_bin_suffix}/zlib*.dll"
+		"${ZLIB_INCLUDE_DIR}/../bin/zlib*.dll"
+		"${ZLIB_INCLUDE_DIR}/bin${_bin_suffix}/zlib*.dll"
+		"${ZLIB_INCLUDE_DIR}/bin/zlib*.dll"
+		)
+endif()
+
 if (CMAKE_CONFIGURATION_TYPES MATCHES "Debug")
 	file(GLOB QT_DEBUG_BIN_FILES
 		"${Qt5Core_DIR}/../../../bin/Qt5Cored.dll"
@@ -139,6 +158,7 @@ set(ALL_BASE_BIN_FILES
 	${FFMPEG_BIN_FILES}
 	${X264_BIN_FILES}
 	${CURL_BIN_FILES}
+	${ZLIB_BIN_FILES}
 	${LIBFDK_BIN_FILES}
 	${FREETYPE_BIN_FILES}
 	${QT_ICU_BIN_FILES})
@@ -170,6 +190,7 @@ message(STATUS "x264 files: ${X264_BIN_FILES}")
 message(STATUS "Libfdk files: ${LIBFDK_BIN_FILES}")
 message(STATUS "Freetype files: ${FREETYPE_BIN_FILES}")
 message(STATUS "curl files: ${CURL_BIN_FILES}")
+message(STATUS "zlib files: ${ZLIB_BIN_FILES}")
 message(STATUS "QT Debug files: ${QT_DEBUG_BIN_FILES}")
 message(STATUS "QT Debug Platform files: ${QT_DEBUG_PLAT_BIN_FILES}")
 message(STATUS "QT Release files: ${QT_BIN_FILES}")

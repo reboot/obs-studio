@@ -362,6 +362,13 @@ typedef OSStatus (*AudioFormatGetProperty_t) (
 	void                  *outPropertyData
 );
 
+typedef OSStatus (*AudioFormatGetPropertyInfo_t) (
+	AudioFormatPropertyID inPropertyID,
+	UInt32                inSpecifierSize,
+	const void            *inSpecifier,
+	UInt32                *outPropertyDataSize
+);
+
 static AudioConverterNew_t AudioConverterNew = NULL;
 static AudioConverterDispose_t AudioConverterDispose = NULL;
 static AudioConverterReset_t AudioConverterReset = NULL;
@@ -370,6 +377,7 @@ static AudioConverterGetPropertyInfo_t AudioConverterGetPropertyInfo = NULL;
 static AudioConverterSetProperty_t AudioConverterSetProperty = NULL;
 static AudioConverterFillComplexBuffer_t AudioConverterFillComplexBuffer = NULL;
 static AudioFormatGetProperty_t AudioFormatGetProperty = NULL;
+static AudioFormatGetPropertyInfo_t AudioFormatGetPropertyInfo = NULL;
 
 static HMODULE audio_toolbox = NULL;
 
@@ -387,7 +395,7 @@ static void release_lib(void)
 static bool load_lib(void)
 {
 	PWSTR common_path;
-	if (SHGetKnownFolderPath(&FOLDERID_ProgramFilesCommon, 0, NULL,
+	if (SHGetKnownFolderPath(FOLDERID_ProgramFilesCommon, 0, NULL,
 				&common_path) != S_OK) {
 		CA_LOG(LOG_WARNING, "Could not retrieve common files path");
 		return false;
@@ -429,10 +437,15 @@ static void unload_core_audio(void)
 	AudioConverterSetProperty = NULL;
 	AudioConverterFillComplexBuffer = NULL;
 	AudioFormatGetProperty = NULL;
+	AudioFormatGetPropertyInfo = NULL;
 
 	release_lib();
 }
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4706)
+#endif
 static bool load_core_audio(void)
 {
 	if (!load_lib())
@@ -456,6 +469,7 @@ static bool load_core_audio(void)
 	LOAD_SYM(AudioConverterSetProperty);
 	LOAD_SYM(AudioConverterFillComplexBuffer);
 	LOAD_SYM(AudioFormatGetProperty);
+	LOAD_SYM(AudioFormatGetPropertyInfo);
 #undef LOAD_SYM
 
 	return true;
@@ -465,3 +479,6 @@ unload_everything:
 
 	return false;
 }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

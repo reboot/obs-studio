@@ -30,8 +30,7 @@ struct gs_exports {
 			bool (*callback)(void*, const char*, uint32_t),
 			void*);
 	const char *(*device_preprocessor_name)(void);
-	int (*device_create)(gs_device_t **device,
-			const struct gs_init_data *data);
+	int (*device_create)(gs_device_t **device, uint32_t adapter);
 	void (*device_destroy)(gs_device_t *device);
 	void (*device_enter_context)(gs_device_t *device);
 	void (*device_leave_context)(gs_device_t *device);
@@ -171,7 +170,7 @@ struct gs_exports {
 	void     (*gs_voltexture_destroy)(gs_texture_t *voltex);
 	uint32_t (*gs_voltexture_get_width)(const gs_texture_t *voltex);
 	uint32_t (*gs_voltexture_get_height)(const gs_texture_t *voltex);
-	uint32_t (*gs_voltexture_getdepth)(const gs_texture_t *voltex);
+	uint32_t (*gs_voltexture_get_depth)(const gs_texture_t *voltex);
 	enum gs_color_format (*gs_voltexture_get_color_format)(
 			const gs_texture_t *voltex);
 
@@ -215,7 +214,7 @@ struct gs_exports {
 	void (*gs_shader_set_bool)(gs_sparam_t *param, bool val);
 	void (*gs_shader_set_float)(gs_sparam_t *param, float val);
 	void (*gs_shader_set_int)(gs_sparam_t *param, int val);
-	void (*gs_shader_setmatrix3)(gs_sparam_t *param,
+	void (*gs_shader_set_matrix3)(gs_sparam_t *param,
 			const struct matrix3 *val);
 	void (*gs_shader_set_matrix4)(gs_sparam_t *param,
 			const struct matrix4 *val);

@@ -56,8 +56,9 @@ struct obs_x264 {
 
 /* ------------------------------------------------------------------------- */
 
-static const char *obs_x264_getname(void)
+static const char *obs_x264_getname(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return "x264";
 }
 
@@ -95,6 +96,7 @@ static void obs_x264_defaults(obs_data_t *settings)
 	obs_data_set_default_int   (settings, "buffer_size", 2500);
 	obs_data_set_default_int   (settings, "keyint_sec",  0);
 	obs_data_set_default_int   (settings, "crf",         23);
+	obs_data_set_default_bool  (settings, "vfr",         false);
 	obs_data_set_default_bool  (settings, "cbr",         true);
 
 	obs_data_set_default_string(settings, "preset",      "veryfast");
@@ -115,6 +117,7 @@ static inline void add_strings(obs_property_t *list, const char *const *strings)
 #define TEXT_CUSTOM_BUF obs_module_text("CustomBufsize")
 #define TEXT_BUF_SIZE   obs_module_text("BufferSize")
 #define TEXT_USE_CBR    obs_module_text("UseCBR")
+#define TEXT_VFR        obs_module_text("VFR")
 #define TEXT_CRF        obs_module_text("CRF")
 #define TEXT_KEYINT_SEC obs_module_text("KeyframeIntervalSec")
 #define TEXT_PRESET     obs_module_text("CPUPreset")
@@ -177,6 +180,8 @@ static obs_properties_t *obs_x264_props(void *unused)
 			OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(list, TEXT_NONE, "");
 	add_strings(list, x264_tune_names);
+
+	obs_properties_add_bool(props, "vfr", TEXT_VFR);
 
 	obs_properties_add_text(props, "x264opts", TEXT_X264_OPTS,
 			OBS_TEXT_DEFAULT);
@@ -368,6 +373,7 @@ static void update_params(struct obs_x264 *obsx264, obs_data_t *settings,
 	int width        = (int)obs_encoder_get_width(obsx264->encoder);
 	int height       = (int)obs_encoder_get_height(obsx264->encoder);
 	bool use_bufsize = obs_data_get_bool(settings, "use_bufsize");
+	bool vfr         = obs_data_get_bool(settings, "vfr");
 	bool cbr         = obs_data_get_bool(settings, "cbr");
 
 	if (keyint_sec)
@@ -377,7 +383,7 @@ static void update_params(struct obs_x264 *obsx264, obs_data_t *settings,
 	if (!use_bufsize)
 		buffer_size = bitrate;
 
-	obsx264->params.b_vfr_input          = false;
+	obsx264->params.b_vfr_input          = vfr;
 	obsx264->params.rc.i_vbv_max_bitrate = bitrate;
 	obsx264->params.rc.i_vbv_buffer_size = buffer_size;
 	obsx264->params.rc.i_bitrate         = bitrate;
@@ -429,17 +435,22 @@ static void update_params(struct obs_x264 *obsx264, obs_data_t *settings,
 	info("settings:\n"
 	     "\tbitrate:     %d\n"
 	     "\tbuffer size: %d\n"
+	     "\tcrf:         %d%s\n"
 	     "\tfps_num:     %d\n"
 	     "\tfps_den:     %d\n"
 	     "\twidth:       %d\n"
 	     "\theight:      %d\n"
 	     "\tkeyint:      %d\n"
+	     "\tvfr:         %s\n"
 	     "\tcbr:         %s",
 	     obsx264->params.rc.i_vbv_max_bitrate,
 	     obsx264->params.rc.i_vbv_buffer_size,
+	     (int)obsx264->params.rc.f_rf_constant,
+	     cbr ? " (0 when CBR is enabled)" : "",
 	     voi->fps_num, voi->fps_den,
 	     width, height,
 	     obsx264->params.i_keyint_max,
+	     vfr ? "on" : "off",
 	     cbr ? "on" : "off");
 }
 
@@ -454,6 +465,8 @@ static bool update_settings(struct obs_x264 *obsx264, obs_data_t *settings)
 	bool success = true;
 
 	paramlist = strlist_split(opts, ' ', false);
+
+	blog(LOG_INFO, "---------------------------------");
 
 	if (!obsx264->context) {
 		override_base_params(obsx264, paramlist,

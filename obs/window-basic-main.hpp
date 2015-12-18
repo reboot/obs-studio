@@ -47,6 +47,9 @@ class QNetworkReply;
 #define AUX_AUDIO_2     Str("AuxAudioDevice2")
 #define AUX_AUDIO_3     Str("AuxAudioDevice3")
 
+#define SIMPLE_ENCODER_X264                    "x264"
+#define SIMPLE_ENCODER_X264_LOWCPU             "x264_lowcpu"
+
 struct BasicOutputHandler;
 
 enum class QtDataRole {
@@ -58,6 +61,7 @@ class OBSBasic : public OBSMainWindow {
 	Q_OBJECT
 
 	friend class OBSBasicPreview;
+	friend class OBSBasicStatusBar;
 
 	enum class MoveDir {
 		Up,
@@ -75,6 +79,7 @@ private:
 
 	bool loaded = false;
 	long disableSaving = 1;
+	bool projectChanged = false;
 
 	QPointer<QThread> updateCheckThread;
 	QPointer<QThread> logUploadThread;
@@ -105,11 +110,14 @@ private:
 
 	QPointer<QWidget> projectors[10];
 
+	QPointer<QMenu> startStreamMenu;
+
 	void          DrawBackdrop(float cx, float cy);
 
 	void          SetupEncoders();
 
-	void          CreateDefaultScene();
+	void          CreateFirstRunSources();
+	void          CreateDefaultScene(bool firstStart);
 
 	void          ClearVolumeControls();
 
@@ -162,6 +170,7 @@ private:
 
 	void CloseDialogs();
 	void ClearSceneData();
+	void CleanupUnusedSources();
 
 	void Nudge(int dist, MoveDir dir);
 	void OpenProjector(obs_source_t *source, int monitor);
@@ -182,11 +191,18 @@ private:
 	void RefreshProfiles();
 	void ChangeProfile();
 
+	void SaveProjectNow();
+
 	obs_hotkey_pair_id streamingHotkeys, recordingHotkeys;
+	obs_hotkey_id forceStreamingStopHotkey;
 
 public slots:
 	void StartStreaming();
 	void StopStreaming();
+	void ForceStopStreaming();
+
+	void StreamDelayStarting(int sec);
+	void StreamDelayStopping(int sec);
 
 	void StreamingStart();
 	void StreamingStop(int errorcode);
@@ -197,6 +213,7 @@ public slots:
 	void RecordingStart();
 	void RecordingStop(int code);
 
+	void SaveProjectDeferred();
 	void SaveProject();
 
 private slots:
@@ -212,6 +229,7 @@ private slots:
 	void ActivateAudioSource(OBSSource source);
 	void DeactivateAudioSource(OBSSource source);
 
+	void DuplicateSelectedScene();
 	void RemoveSelectedScene();
 	void RemoveSelectedSceneItem();
 
@@ -320,8 +338,7 @@ private slots:
 	void on_actionRemoveScene_triggered();
 	void on_actionSceneUp_triggered();
 	void on_actionSceneDown_triggered();
-	void on_sources_currentItemChanged(QListWidgetItem *current,
-			QListWidgetItem *prev);
+	void on_sources_itemSelectionChanged();
 	void on_sources_customContextMenuRequested(const QPoint &pos);
 	void on_sources_itemDoubleClicked(QListWidgetItem *item);
 	void on_actionAddSource_triggered();
@@ -399,7 +416,7 @@ public:
 	virtual config_t *Config() const override;
 
 	virtual int GetProfilePath(char *path, size_t size, const char *file)
-		const;
+		const override;
 
 private:
 	std::unique_ptr<Ui::OBSBasic> ui;

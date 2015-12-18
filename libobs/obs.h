@@ -19,6 +19,7 @@
 
 #include "util/c99defs.h"
 #include "util/bmem.h"
+#include "util/profiler.h"
 #include "util/text-lookup.h"
 #include "graphics/graphics.h"
 #include "graphics/vec2.h"
@@ -154,9 +155,6 @@ struct obs_video_info {
 	uint32_t            fps_num;       /**< Output FPS numerator */
 	uint32_t            fps_den;       /**< Output FPS denominator */
 
-	uint32_t            window_width;  /**< Window width */
-	uint32_t            window_height; /**< Window height */
-
 	uint32_t            base_width;    /**< Base compositing width */
 	uint32_t            base_height;   /**< Base compositing height */
 
@@ -166,8 +164,6 @@ struct obs_video_info {
 
 	/** Video adapter index to use (NOTE: avoid for optimus laptops) */
 	uint32_t            adapter;
-
-	struct gs_window    window;        /**< Window to render to */
 
 	/** Use shaders to convert to different color formats */
 	bool                gpu_conversion;
@@ -245,9 +241,13 @@ struct obs_source_frame {
 /**
  * Initializes OBS
  *
- * @param  locale  The locale to use for modules
+ * @param  locale              The locale to use for modules
+ * @param  module_config_path  Path to module config storage directory
+ *                             (or NULL if none)
+ * @param  store               The profiler name store for OBS to use or NULL
  */
-EXPORT bool obs_startup(const char *locale);
+EXPORT bool obs_startup(const char *locale, const char *module_config_path,
+		profiler_name_store_t *store);
 
 /** Releases all data associated with OBS and terminates the OBS context */
 EXPORT void obs_shutdown(void);
@@ -268,6 +268,13 @@ EXPORT void obs_set_locale(const char *locale);
 
 /** @return the current locale */
 EXPORT const char *obs_get_locale(void);
+
+/**
+ * Returns the profiler name store (see util/profiler.h) used by OBS, which is
+ * either a name store passed to obs_startup, an internal name store, or NULL
+ * in case obs_initialized() returns false.
+ */
+EXPORT profiler_name_store_t *obs_get_profiler_name_store(void);
 
 /**
  * Sets base video ouput base resolution/fps/format.
@@ -396,6 +403,19 @@ EXPORT lookup_t *obs_module_load_locale(obs_module_t *module,
 EXPORT char *obs_find_module_file(obs_module_t *module, const char *file);
 
 /**
+ * Returns the path of a plugin module config file (whether it exists or not)
+ *
+ * @note   Modules should use obs_module_config_path function defined in
+ *         obs-module.h as a more elegant means of getting their files without
+ *         having to specify the module parameter.
+ *
+ * @param  module  The module associated with the path
+ * @param  file    The file to get a path to
+ * @return         Path string, or NULL if not found.  Use bfree to free string.
+ */
+EXPORT char *obs_module_get_config_path(obs_module_t *module, const char *file);
+
+/**
  * Enumerates all available inputs source types.
  *
  *   Inputs are general source inputs (such as capture sources, device sources,
@@ -500,45 +520,28 @@ EXPORT obs_encoder_t *obs_get_encoder_by_name(const char *name);
 /** Gets an service by its name. */
 EXPORT obs_service_t *obs_get_service_by_name(const char *name);
 
-/** Returns the default effect for generic RGB/YUV drawing */
-EXPORT gs_effect_t *obs_get_default_effect(void);
+enum obs_base_effect {
+	OBS_EFFECT_DEFAULT,            /**< RGB/YUV */
+	OBS_EFFECT_DEFAULT_RECT,       /**< RGB/YUV (using texture_rect) */
+	OBS_EFFECT_OPAQUE,             /**< RGB/YUV (alpha set to 1.0) */
+	OBS_EFFECT_SOLID,              /**< RGB/YUV (solid color only) */
+	OBS_EFFECT_BICUBIC,            /**< Bicubic downscale */
+	OBS_EFFECT_LANCZOS,            /**< Lanczos downscale */
+	OBS_EFFECT_BILINEAR_LOWRES,    /**< Bilinear low resolution downscale */
+};
 
-/** Returns the default effect for generic RGB/YUV drawing using texture_rect */
-EXPORT gs_effect_t *obs_get_default_rect_effect(void);
+/** Returns a commonly used base effect */
+EXPORT gs_effect_t *obs_get_base_effect(enum obs_base_effect effect);
 
-/** Returns the default effect for generic RGB/YUV drawing (alpha set to 1) */
-EXPORT gs_effect_t *obs_get_opaque_effect(void);
-
-/** Returns the solid effect for drawing solid colors */
-EXPORT gs_effect_t *obs_get_solid_effect(void);
-
-/** Returns the bicubic scaling effect */
-EXPORT gs_effect_t *obs_get_bicubic_effect(void);
-
-/** Returns the lanczos scaling effect */
-EXPORT gs_effect_t *obs_get_lanczos_effect(void);
-
-/** Returns the bilinear lowres scaling effect */
-EXPORT gs_effect_t *obs_get_bilinear_lowres_effect(void);
+/* DEPRECATED: gets texture_rect default effect */
+DEPRECATED_START EXPORT gs_effect_t *obs_get_default_rect_effect(void)
+	DEPRECATED_END;
 
 /** Returns the primary obs signal handler */
 EXPORT signal_handler_t *obs_get_signal_handler(void);
 
 /** Returns the primary obs procedure handler */
 EXPORT proc_handler_t *obs_get_proc_handler(void);
-
-/** Adds a draw callback to the main render context */
-EXPORT void obs_add_draw_callback(
-		void (*draw)(void *param, uint32_t cx, uint32_t cy),
-		void *param);
-
-/** Removes a draw callback to the main render context */
-EXPORT void obs_remove_draw_callback(
-		void (*draw)(void *param, uint32_t cx, uint32_t cy),
-		void *param);
-
-/** Changes the size of the main view */
-EXPORT void obs_resize(uint32_t cx, uint32_t cy);
 
 /** Renders the main view */
 EXPORT void obs_render_main_view(void);
@@ -566,9 +569,6 @@ EXPORT void obs_load_sources(obs_data_array_t *array);
 
 /** Saves sources to a data array */
 EXPORT obs_data_array_t *obs_save_sources(void);
-
-EXPORT void obs_preview_set_enabled(bool enable);
-EXPORT bool obs_preview_enabled(void);
 
 
 /* ------------------------------------------------------------------------- */
@@ -882,6 +882,8 @@ EXPORT void obs_source_set_push_to_talk_delay(obs_source_t *source,
 /* ------------------------------------------------------------------------- */
 /* Functions used by sources */
 
+EXPORT void *obs_source_get_type_data(obs_source_t *source);
+
 /**
  * Helper function to set the color matrix information when drawing the source.
  *
@@ -1014,6 +1016,14 @@ EXPORT uint32_t obs_source_get_base_height(obs_source_t *source);
  */
 EXPORT obs_scene_t *obs_scene_create(const char *name);
 
+/**
+ * Duplicates a scene.
+ *
+ *   Sources in a scene will not be recreated; it will contain references to
+ * the same sources as the originating scene.
+ */
+EXPORT obs_scene_t *obs_scene_duplicate(obs_scene_t *scene, const char *name);
+
 EXPORT void        obs_scene_addref(obs_scene_t *scene);
 EXPORT void        obs_scene_release(obs_scene_t *scene);
 
@@ -1141,6 +1151,32 @@ EXPORT bool obs_output_start(obs_output_t *output);
 /** Stops the output. */
 EXPORT void obs_output_stop(obs_output_t *output);
 
+/**
+ * On reconnection, start where it left of on reconnection.  Note however that
+ * this option will consume extra memory to continually increase delay while
+ * waiting to reconnect.
+ */
+#define OBS_OUTPUT_DELAY_PRESERVE (1<<0)
+
+/**
+ * Sets the current output delay, in seconds (if the output supports delay).
+ *
+ * If delay is currently active, it will set the delay value, but will not
+ * affect the current delay, it will only affect the next time the output is
+ * activated.
+ */
+EXPORT void obs_output_set_delay(obs_output_t *output, uint32_t delay_sec,
+		uint32_t flags);
+
+/** Gets the currently set delay value, in seconds. */
+EXPORT uint32_t obs_output_get_delay(const obs_output_t *output);
+
+/** If delay is active, gets the currently active delay value, in seconds. */
+EXPORT uint32_t obs_output_get_active_delay(const obs_output_t *output);
+
+/** Forces the output to stop.  Usually only used with delay. */
+EXPORT void obs_output_force_stop(obs_output_t *output);
+
 /** Returns whether the output is active */
 EXPORT bool obs_output_active(const obs_output_t *output);
 
@@ -1160,7 +1196,7 @@ EXPORT obs_properties_t *obs_output_properties(const obs_output_t *output);
 EXPORT void obs_output_update(obs_output_t *output, obs_data_t *settings);
 
 /** Specifies whether the output can be paused */
-EXPORT bool obs_output_canpause(const obs_output_t *output);
+EXPORT bool obs_output_can_pause(const obs_output_t *output);
 
 /** Pauses the output (if the functionality is allowed by the output */
 EXPORT void obs_output_pause(obs_output_t *output);
@@ -1265,8 +1301,12 @@ EXPORT uint32_t obs_output_get_width(const obs_output_t *output);
 /** For video outputs, returns the height of the encoded image */
 EXPORT uint32_t obs_output_get_height(const obs_output_t *output);
 
+EXPORT const char *obs_output_get_id(const obs_output_t *output);
+
 /* ------------------------------------------------------------------------- */
 /* Functions used by outputs */
+
+EXPORT void *obs_output_get_type_data(obs_output_t *output);
 
 /** Optionally sets the video conversion info.  Used only for raw output */
 EXPORT void obs_output_set_video_conversion(obs_output_t *output,
@@ -1385,6 +1425,9 @@ EXPORT uint32_t obs_encoder_get_width(const obs_encoder_t *encoder);
 /** For video encoders, returns the height of the encoded image */
 EXPORT uint32_t obs_encoder_get_height(const obs_encoder_t *encoder);
 
+/** For audio encoders, returns the sample rate of the audio */
+EXPORT uint32_t obs_encoder_get_sample_rate(const obs_encoder_t *encoder);
+
 /**
  * Sets the preferred video format for a video encoder.  If the encoder can use
  * the format specified, it will force a conversion to that format if the
@@ -1443,6 +1486,10 @@ EXPORT audio_t *obs_encoder_audio(const obs_encoder_t *encoder);
 
 /** Returns true if encoder is active, false otherwise */
 EXPORT bool obs_encoder_active(const obs_encoder_t *encoder);
+
+EXPORT void *obs_encoder_get_type_data(obs_encoder_t *encoder);
+
+EXPORT const char *obs_encoder_get_id(const obs_encoder_t *encoder);
 
 /** Duplicates an encoder packet */
 EXPORT void obs_duplicate_encoder_packet(struct encoder_packet *dst,
@@ -1520,6 +1567,10 @@ EXPORT const char *obs_service_get_password(const obs_service_t *service);
 EXPORT void obs_service_apply_encoder_settings(obs_service_t *service,
 		obs_data_t *video_encoder_settings,
 		obs_data_t *audio_encoder_settings);
+
+EXPORT void *obs_service_get_type_data(obs_service_t *service);
+
+EXPORT const char *obs_service_get_id(const obs_service_t *service);
 
 
 /* ------------------------------------------------------------------------- */

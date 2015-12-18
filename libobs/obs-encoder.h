@@ -120,9 +120,10 @@ struct obs_encoder_info {
 	/**
 	 * Gets the full translated name of this encoder
 	 *
-	 * @return         Translated name of the encoder
+	 * @param  type_data  The type_data variable of this structure
+	 * @return            Translated name of the encoder
 	 */
-	const char *(*get_name)(void);
+	const char *(*get_name)(void *type_data);
 
 	/**
 	 * Creates the encoder with the specified settings
@@ -223,6 +224,9 @@ struct obs_encoder_info {
 	 * @param[in/out]  info  Video format information
 	 */
 	void (*get_video_info)(void *data, struct video_scale_info *info);
+
+	void *type_data;
+	void (*free_type_data)(void *type_data);
 };
 
 EXPORT void obs_register_encoder_s(const struct obs_encoder_info *info,

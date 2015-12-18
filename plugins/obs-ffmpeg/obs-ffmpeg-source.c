@@ -24,40 +24,16 @@
 
 #include <libswscale/swscale.h>
 
+#define FF_LOG(level, format, ...) \
+	blog(level, "[Media Source]: " format, ##__VA_ARGS__)
+#define FF_LOG_S(source, level, format, ...) \
+	blog(level, "[Media Source '%s']: " format, \
+			obs_source_get_name(source), ##__VA_ARGS__)
+#define FF_BLOG(level, format, ...) \
+	FF_LOG_S(s->source, level, format, ##__VA_ARGS__)
+
 static bool video_frame(struct ff_frame *frame, void *opaque);
 static bool video_format(AVCodecContext *codec_context, void *opaque);
-
-static void ffmpeg_log_callback(void* context, int level, const char* format,
-	va_list args)
-{
-	UNUSED_PARAMETER(context);
-	int obs_level;
-
-	switch (level) {
-	case AV_LOG_PANIC:
-	case AV_LOG_FATAL:
-		obs_level = LOG_ERROR;
-		break;
-	case AV_LOG_ERROR:
-	case AV_LOG_WARNING:
-		obs_level = LOG_WARNING;
-		break;
-	case AV_LOG_INFO:
-	case AV_LOG_VERBOSE:
-		obs_level = LOG_INFO;
-		break;
-	case AV_LOG_DEBUG:
-	default:
-		obs_level = LOG_DEBUG;
-	}
-
-	blogva(obs_level, format, args);
-}
-
-void initialize_ffmpeg_source()
-{
-	av_log_set_callback(ffmpeg_log_callback);
-}
 
 struct ffmpeg_source {
 	struct ff_demuxer *demuxer;
@@ -74,7 +50,7 @@ struct ffmpeg_source {
 };
 
 static bool set_obs_frame_colorprops(struct ff_frame *frame,
-		struct obs_source_frame *obs_frame)
+		struct ffmpeg_source *s, struct obs_source_frame *obs_frame)
 {
 	enum AVColorSpace frame_cs = av_frame_get_colorspace(frame->frame);
 	enum video_colorspace obs_cs;
@@ -85,7 +61,7 @@ static bool set_obs_frame_colorprops(struct ff_frame *frame,
 	case AVCOL_SPC_BT470BG:     obs_cs = VIDEO_CS_601; break;
 	case AVCOL_SPC_UNSPECIFIED: obs_cs = VIDEO_CS_DEFAULT; break;
 	default:
-		blog(LOG_WARNING, "frame using an unsupported colorspace %d",
+		FF_BLOG(LOG_WARNING, "frame using an unsupported colorspace %d",
 				frame_cs);
 		obs_cs = VIDEO_CS_DEFAULT;
 	}
@@ -101,7 +77,7 @@ static bool set_obs_frame_colorprops(struct ff_frame *frame,
 			range, obs_frame->color_matrix,
 			obs_frame->color_range_min,
 			obs_frame->color_range_max)) {
-		blog(LOG_ERROR, "Failed to get video format "
+		FF_BLOG(LOG_ERROR, "Failed to get video format "
                                 "parameters for video format %u",
                                 obs_cs);
 		return false;
@@ -110,23 +86,23 @@ static bool set_obs_frame_colorprops(struct ff_frame *frame,
 	return true;
 }
 
-bool update_sws_context(struct ffmpeg_source *source, AVFrame *frame)
+bool update_sws_context(struct ffmpeg_source *s, AVFrame *frame)
 {
-	if (frame->width != source->sws_width
-			|| frame->height != source->sws_height
-			|| frame->format != source->sws_format) {
-		if (source->sws_ctx != NULL)
-			sws_freeContext(source->sws_ctx);
+	if (frame->width != s->sws_width
+			|| frame->height != s->sws_height
+			|| frame->format != s->sws_format) {
+		if (s->sws_ctx != NULL)
+			sws_freeContext(s->sws_ctx);
 
 		if (frame->width <= 0 || frame->height <= 0) {
-			av_log(NULL, AV_LOG_ERROR, "unable to create a sws "
+			FF_BLOG(LOG_ERROR, "unable to create a sws "
 					"context that has a width(%d) or "
 					"height(%d) of zero.", frame->width,
 					frame->height);
 			goto fail;
 		}
 
-		source->sws_ctx = sws_getContext(
+		s->sws_ctx = sws_getContext(
 			frame->width,
 			frame->height,
 			frame->format,
@@ -136,8 +112,8 @@ bool update_sws_context(struct ffmpeg_source *source, AVFrame *frame)
 			SWS_BILINEAR,
 			NULL, NULL, NULL);
 
-		if (source->sws_ctx == NULL) {
-			av_log(NULL, AV_LOG_ERROR, "unable to create sws "
+		if (s->sws_ctx == NULL) {
+			FF_BLOG(LOG_ERROR, "unable to create sws "
 					"context with src{w:%d,h:%d,f:%d}->"
 					"dst{w:%d,h:%d,f:%d}",
 					frame->width, frame->height,
@@ -147,37 +123,37 @@ bool update_sws_context(struct ffmpeg_source *source, AVFrame *frame)
 
 		}
 
-		if (source->sws_data != NULL)
-			bfree(source->sws_data);
-		source->sws_data = bzalloc(frame->width * frame->height * 4);
-		if (source->sws_data == NULL) {
-			av_log(NULL, AV_LOG_ERROR, "unable to allocate sws "
+		if (s->sws_data != NULL)
+			bfree(s->sws_data);
+		s->sws_data = bzalloc(frame->width * frame->height * 4);
+		if (s->sws_data == NULL) {
+			FF_BLOG(LOG_ERROR, "unable to allocate sws "
 					"pixel data with size %d",
 					frame->width * frame->height * 4);
 			goto fail;
 		}
 
-		source->sws_linesize = frame->width * 4;
-		source->sws_width = frame->width;
-		source->sws_height = frame->height;
-		source->sws_format = frame->format;
+		s->sws_linesize = frame->width * 4;
+		s->sws_width = frame->width;
+		s->sws_height = frame->height;
+		s->sws_format = frame->format;
 	}
 
 	return true;
 
 fail:
-	if (source->sws_ctx != NULL)
-		sws_freeContext(source->sws_ctx);
-	source->sws_ctx = NULL;
+	if (s->sws_ctx != NULL)
+		sws_freeContext(s->sws_ctx);
+	s->sws_ctx = NULL;
 
-	if (source->sws_data)
-		bfree(source->sws_data);
-	source->sws_data = NULL;
+	if (s->sws_data)
+		bfree(s->sws_data);
+	s->sws_data = NULL;
 
-	source->sws_linesize = 0;
-	source->sws_width = 0;
-	source->sws_height = 0;
-	source->sws_format = 0;
+	s->sws_linesize = 0;
+	s->sws_width = 0;
+	s->sws_height = 0;
+	s->sws_format = 0;
 
 	return false;
 }
@@ -208,7 +184,7 @@ static bool video_frame_scale(struct ff_frame *frame,
 }
 
 static bool video_frame_hwaccel(struct ff_frame *frame,
-		obs_source_t *source, struct obs_source_frame *obs_frame)
+		struct ffmpeg_source *s, struct obs_source_frame *obs_frame)
 {
 	// 4th plane is pixelbuf reference for mac
 	for (int i = 0; i < 3; i++) {
@@ -216,10 +192,10 @@ static bool video_frame_hwaccel(struct ff_frame *frame,
 		obs_frame->linesize[i] = frame->frame->linesize[i];
 	}
 
-	if (!set_obs_frame_colorprops(frame, obs_frame))
+	if (!set_obs_frame_colorprops(frame, s, obs_frame))
 		return false;
 
-	obs_source_output_video(source, obs_frame);
+	obs_source_output_video(s->source, obs_frame);
 	return true;
 }
 
@@ -233,7 +209,7 @@ static bool video_frame_direct(struct ff_frame *frame,
 		obs_frame->linesize[i] = frame->frame->linesize[i];
 	}
 
-	if (!set_obs_frame_colorprops(frame, obs_frame))
+	if (!set_obs_frame_colorprops(frame, s, obs_frame))
 		return false;
 
 	obs_source_output_video(s->source, obs_frame);
@@ -265,7 +241,7 @@ static bool video_frame(struct ff_frame *frame, void *opaque)
 	if (s->is_forcing_scale || format == VIDEO_FORMAT_NONE)
 		return video_frame_scale(frame, s, &obs_frame);
 	else if (s->is_hw_decoding)
-		return video_frame_hwaccel(frame, s->source, &obs_frame);
+		return video_frame_hwaccel(frame, s, &obs_frame);
 	else
 		return video_frame_direct(frame, s, &obs_frame);
 }
@@ -413,6 +389,56 @@ static obs_properties_t *ffmpeg_source_getproperties(void *data)
 	return props;
 }
 
+static const char *frame_drop_to_str(enum AVDiscard discard)
+{
+#define DISCARD_CASE(x) case AVDISCARD_ ## x: return "AVDISCARD_" #x
+	switch (discard)
+	{
+	DISCARD_CASE(NONE);
+	DISCARD_CASE(DEFAULT);
+	DISCARD_CASE(NONREF);
+	DISCARD_CASE(BIDIR);
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(55, 67, 100)
+	DISCARD_CASE(NONINTRA);
+#endif
+	DISCARD_CASE(NONKEY);
+	DISCARD_CASE(ALL);
+	default: return "(Unknown)";
+	};
+#undef DISCARD_CASE
+}
+
+static void dump_source_info(struct ffmpeg_source *s, const char *input,
+		const char *input_format, bool is_advanced)
+{
+	FF_BLOG(LOG_INFO,
+			"settings:\n"
+			"\tinput:                   %s\n"
+			"\tinput_format:            %s\n"
+			"\tis_looping:              %s\n"
+			"\tis_forcing_scale:        %s\n"
+			"\tis_hw_decoding:          %s\n"
+			"\tis_clear_on_media_end:   %s",
+			input ? input : "(null)",
+			input_format ? input_format : "(null)",
+			s->demuxer->options.is_looping ? "yes" : "no",
+			s->is_forcing_scale ? "yes" : "no",
+			s->is_hw_decoding ? "yes" : "no",
+			s->is_clear_on_media_end ? "yes" : "no");
+
+	if (!is_advanced)
+		return;
+
+	FF_BLOG(LOG_INFO,
+			"advanced settings:\n"
+			"\taudio_buffer_size:       %d\n"
+			"\tvideo_buffer_size:       %d\n"
+			"\tframe_drop:              %s",
+			s->demuxer->options.audio_frame_queue_size,
+			s->demuxer->options.video_frame_queue_size,
+			frame_drop_to_str(s->demuxer->options.frame_drop));
+}
+
 static void ffmpeg_source_update(void *data, obs_data_t *settings)
 {
 	struct ffmpeg_source *s = data;
@@ -458,12 +484,12 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 
 		if (audio_buffer_size < 1) {
 			audio_buffer_size = 1;
-			blog(LOG_WARNING, "invalid audio_buffer_size %d",
+			FF_BLOG(LOG_WARNING, "invalid audio_buffer_size %d",
 					audio_buffer_size);
 		}
 		if (video_buffer_size < 1) {
 			video_buffer_size = 1;
-			blog(LOG_WARNING, "invalid audio_buffer_size %d",
+			FF_BLOG(LOG_WARNING, "invalid audio_buffer_size %d",
 					audio_buffer_size);
 		}
 		s->demuxer->options.audio_frame_queue_size = audio_buffer_size;
@@ -471,7 +497,8 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 
 		if (frame_drop < AVDISCARD_NONE || frame_drop > AVDISCARD_ALL) {
 			frame_drop = AVDISCARD_NONE;
-			blog(LOG_WARNING, "invalid frame_drop %d", frame_drop);
+			FF_BLOG(LOG_WARNING, "invalid frame_drop %d",
+					frame_drop);
 		}
 		s->demuxer->options.frame_drop = frame_drop;
 	}
@@ -484,12 +511,15 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 			audio_frame, NULL,
 			NULL, NULL, NULL, s);
 
+	dump_source_info(s, input, input_format, is_advanced);
+
 	ff_demuxer_open(s->demuxer, input, input_format);
 }
 
 
-static const char *ffmpeg_source_getname(void)
+static const char *ffmpeg_source_getname(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return obs_module_text("FFMpegSource");
 }
 

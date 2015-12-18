@@ -26,19 +26,27 @@ find_path(X264_INCLUDE_DIR
 		ENV x264Path
 		ENV DepsPath${_lib_suffix}
 		ENV DepsPath
-		${x264Path${lib_suffix}}
+		${x264Path${_lib_suffix}}
 		${x264Path}
-		${DepsPath${lib_suffix}}
+		${DepsPath${_lib_suffix}}
 		${DepsPath}
 		${_X264_INCLUDE_DIRS}
 	PATHS
-		/usr/include /usr/local/include /opt/local/include /sw/include)
+		/usr/include /usr/local/include /opt/local/include /sw/include
+	PATH_SUFFIXES
+		include)
 
 find_library(X264_LIB
 	NAMES ${_X264_LIBRARIES} x264 libx264
 	HINTS
 		ENV x264Path${_lib_suffix}
 		ENV x264Path
+		ENV DepsPath${_lib_suffix}
+		ENV DepsPath
+		${x264Path${_lib_suffix}}
+		${x264Path}
+		${DepsPath${_lib_suffix}}
+		${DepsPath}
 		${_X264_LIBRARY_DIRS}
 	PATHS
 		/usr/lib /usr/local/lib /opt/local/lib /sw/lib

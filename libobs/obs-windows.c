@@ -15,12 +15,15 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
+#include "util/windows/win-version.h"
 #include "util/platform.h"
 #include "util/dstr.h"
 #include "obs.h"
 #include "obs-internal.h"
 
 #include <windows.h>
+
+static uint32_t win_ver = 0;
 
 const char *get_module_extension(void)
 {
@@ -171,28 +174,52 @@ static void log_available_memory(void)
 
 static void log_windows_version(void)
 {
-	OSVERSIONINFOW osvi;
-	char           *build = NULL;
+	struct win_version_info ver;
+	get_win_ver(&ver);
 
-	osvi.dwOSVersionInfoSize = sizeof(osvi);
-	GetVersionExW(&osvi);
+	blog(LOG_INFO, "Windows Version: %d.%d Build %d (revision: %d)",
+			ver.major, ver.minor, ver.build, ver.revis);
+}
 
-	os_wcs_to_utf8_ptr(osvi.szCSDVersion, 0, &build);
-	blog(LOG_INFO, "Windows Version: %ld.%ld Build %ld %s",
-			osvi.dwMajorVersion,
-			osvi.dwMinorVersion,
-			osvi.dwBuildNumber,
-			build);
+typedef HRESULT (WINAPI *dwm_is_composition_enabled_t)(BOOL*);
 
-	bfree(build);
+static void log_aero(void)
+{
+	dwm_is_composition_enabled_t composition_enabled = NULL;
+
+	const char *aeroMessage = win_ver >= 0x602 ?
+		" (Aero is always on for windows 8 and above)" : "";
+
+	HMODULE dwm = LoadLibraryW(L"dwmapi");
+	BOOL bComposition = true;
+
+	if (!dwm) {
+		return;
+	}
+
+	composition_enabled = (dwm_is_composition_enabled_t)GetProcAddress(dwm,
+			"DwmIsCompositionEnabled");
+	if (!composition_enabled) {
+		return;
+	}
+
+	composition_enabled(&bComposition);
+	blog(LOG_INFO, "Aero is %s%s", bComposition ? "Enabled" : "Disabled",
+			aeroMessage);
 }
 
 void log_system_info(void)
 {
+	struct win_version_info ver;
+	get_win_ver(&ver);
+
+	win_ver = (ver.major << 8) | ver.minor;
+
 	log_processor_info();
 	log_processor_cores();
 	log_available_memory();
 	log_windows_version();
+	log_aero();
 }
 
 
@@ -479,4 +506,122 @@ void obs_key_combination_to_str(obs_key_combination_t combination,
 	if (combination.key != OBS_KEY_NONE) {
 		add_combo_key(combination.key, str);
 	}
+}
+
+bool sym_initialize_called = false;
+
+void reset_win32_symbol_paths(void)
+{
+	static BOOL (WINAPI *sym_initialize_w)(HANDLE, const wchar_t*, BOOL);
+	static BOOL (WINAPI *sym_set_search_path_w)(HANDLE, const wchar_t*);
+	static bool funcs_initialized = false;
+	static bool initialize_success = false;
+
+	struct obs_module *module = obs->first_module;
+	struct dstr path_str = {0};
+	DARRAY(char*) paths;
+	wchar_t *path_str_w = NULL;
+	char *abspath;
+
+	da_init(paths);
+
+	if (!funcs_initialized) {
+		HMODULE mod;
+		funcs_initialized = true;
+
+		mod = LoadLibraryW(L"DbgHelp");
+		if (!mod)
+			return;
+
+		sym_initialize_w = (void*)GetProcAddress(mod, "SymInitializeW");
+		sym_set_search_path_w = (void*)GetProcAddress(mod,
+				"SymSetSearchPathW");
+		if (!sym_initialize_w || !sym_set_search_path_w)
+			return;
+
+		initialize_success = true;
+	}
+
+	if (!initialize_success)
+		return;
+
+	abspath = os_get_abs_path_ptr(".");
+	if (abspath)
+		da_push_back(paths, &abspath);
+
+	while (module) {
+		bool found = false;
+		struct dstr path = {0};
+		char *path_end;
+
+		dstr_copy(&path, module->bin_path);
+		dstr_replace(&path, "/", "\\");
+
+		path_end = strrchr(path.array, '\\');
+		if (!path_end) {
+			module = module->next;
+			dstr_free(&path);
+			continue;
+		}
+
+		*path_end = 0;
+
+		for (size_t i = 0; i < paths.num; i++) {
+			const char *existing_path = paths.array[i];
+			if (astrcmpi(path.array, existing_path) == 0) {
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			abspath = os_get_abs_path_ptr(path.array);
+			if (abspath)
+				da_push_back(paths, &abspath);
+		}
+
+		dstr_free(&path);
+
+		module = module->next;
+	}
+
+	for (size_t i = 0; i < paths.num; i++) {
+		const char *path = paths.array[i];
+		if (path && *path) {
+			if (i != 0)
+				dstr_cat(&path_str, ";");
+			dstr_cat(&path_str, paths.array[i]);
+		}
+	}
+
+	if (path_str.array) {
+		os_utf8_to_wcs_ptr(path_str.array, path_str.len, &path_str_w);
+		if (path_str_w) {
+			if (!sym_initialize_called) {
+				sym_initialize_w(GetCurrentProcess(),
+						path_str_w, false);
+				sym_initialize_called = true;
+			} else {
+				sym_set_search_path_w(GetCurrentProcess(),
+						path_str_w);
+			}
+
+			bfree(path_str_w);
+		}
+	}
+
+	for (size_t i = 0; i < paths.num; i++)
+		bfree(paths.array[i]);
+	dstr_free(&path_str);
+	da_free(paths);
+}
+
+void initialize_com(void)
+{
+	CoInitializeEx(0, COINIT_MULTITHREADED);
+}
+
+void uninitialize_com(void)
+{
+	CoUninitialize();
 }

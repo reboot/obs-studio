@@ -18,6 +18,7 @@
 #pragma once
 
 #include <util/AlignedNew.hpp>
+#include <util/windows/win-version.h>
 
 #include <vector>
 #include <string>
@@ -49,11 +50,10 @@ using namespace std;
 
 static inline uint32_t GetWinVer()
 {
-	OSVERSIONINFO ovi;
-	ovi.dwOSVersionInfoSize = sizeof(ovi);
-	GetVersionEx(&ovi);
+	struct win_version_info ver;
+	get_win_ver(&ver);
 
-	return (ovi.dwMajorVersion << 8) | (ovi.dwMinorVersion);
+	return (ver.major << 8) | ver.minor;
 }
 
 static inline DXGI_FORMAT ConvertGSTextureFormat(gs_color_format format)
@@ -614,7 +614,6 @@ struct gs_device {
 	ComPtr<IDXGIFactory1>       factory;
 	ComPtr<ID3D11Device>        device;
 	ComPtr<ID3D11DeviceContext> context;
-	gs_swap_chain               defaultSwap;
 
 	gs_texture_2d               *curRenderTarget = nullptr;
 	gs_zstencil_buffer          *curZStencilBuffer = nullptr;
@@ -625,7 +624,7 @@ struct gs_device {
 	gs_index_buffer             *curIndexBuffer = nullptr;
 	gs_vertex_shader            *curVertexShader = nullptr;
 	gs_pixel_shader             *curPixelShader = nullptr;
-	gs_swap_chain               *curSwapChain;
+	gs_swap_chain               *curSwapChain = nullptr;
 
 	bool                        zstencilStateChanged = true;
 	bool                        rasterStateChanged = true;
@@ -653,7 +652,7 @@ struct gs_device {
 
 	void InitCompiler();
 	void InitFactory(uint32_t adapterIdx, IDXGIAdapter1 **adapter);
-	void InitDevice(const gs_init_data *data, IDXGIAdapter *adapter);
+	void InitDevice(uint32_t adapterIdx, IDXGIAdapter *adapter);
 
 	ID3D11DepthStencilState *AddZStencilState();
 	ID3D11RasterizerState   *AddRasterState();
@@ -669,5 +668,5 @@ struct gs_device {
 
 	void UpdateViewProjMatrix();
 
-	gs_device(const gs_init_data *data);
+	gs_device(uint32_t adapterIdx);
 };

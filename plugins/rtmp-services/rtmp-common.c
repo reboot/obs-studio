@@ -2,14 +2,17 @@
 #include <obs-module.h>
 #include <jansson.h>
 
+#include "rtmp-format-ver.h"
+
 struct rtmp_common {
 	char *service;
 	char *server;
 	char *key;
 };
 
-static const char *rtmp_common_getname(void)
+static const char *rtmp_common_getname(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return obs_module_text("StreamingServices");
 }
 
@@ -54,10 +57,30 @@ static inline const char *get_string_val(json_t *service, const char *key)
 	return json_string_value(str_val);
 }
 
-static void add_service(obs_property_t *list, json_t *service)
+static inline int get_int_val(json_t *service, const char *key)
+{
+	json_t *integer_val = json_object_get(service, key);
+	if (!integer_val || !json_is_integer(integer_val))
+		return 0;
+
+	return (int)json_integer_value(integer_val);
+}
+
+static inline bool get_bool_val(json_t *service, const char *key)
+{
+	json_t *bool_val = json_object_get(service, key);
+	if (!bool_val || !json_is_boolean(bool_val))
+		return false;
+
+	return json_is_true(bool_val);
+}
+
+static void add_service(obs_property_t *list, json_t *service, bool show_all,
+		const char *cur_service)
 {
 	json_t *servers;
 	const char *name;
+	bool common;
 
 	if (!json_is_object(service)) {
 		blog(LOG_WARNING, "rtmp-common.c: [add_service] service "
@@ -72,6 +95,11 @@ static void add_service(obs_property_t *list, json_t *service)
 		return;
 	}
 
+	common = get_bool_val(service, "common");
+	if (!show_all && !common && strcmp(cur_service, name) != 0) {
+		return;
+	}
+
 	servers = json_object_get(service, "servers");
 	if (!servers || !json_is_array(servers)) {
 		blog(LOG_WARNING, "rtmp-common.c: [add_service] service "
@@ -82,19 +110,20 @@ static void add_service(obs_property_t *list, json_t *service)
 	obs_property_list_add_string(list, name, name);
 }
 
-static void add_services(obs_property_t *list, const char *file, json_t *root)
+static void add_services(obs_property_t *list, json_t *root, bool show_all,
+		const char *cur_service)
 {
 	json_t *service;
 	size_t index;
 
 	if (!json_is_array(root)) {
 		blog(LOG_WARNING, "rtmp-common.c: [add_services] JSON file "
-		                  "'%s' root is not an array", file);
+		                  "root is not an array");
 		return;
 	}
 
 	json_array_foreach (root, index, service) {
-		add_service(list, service);
+		add_service(list, service, show_all, cur_service);
 	}
 }
 
@@ -103,6 +132,8 @@ static json_t *open_json_file(const char *file)
 	char         *file_data = os_quick_read_utf8_file(file);
 	json_error_t error;
 	json_t       *root;
+	json_t       *list;
+	int          format_ver;
 
 	if (!file_data)
 		return NULL;
@@ -112,19 +143,62 @@ static json_t *open_json_file(const char *file)
 
 	if (!root) {
 		blog(LOG_WARNING, "rtmp-common.c: [open_json_file] "
-		                  "Error reading JSON file '%s' (%d): %s",
-		                  file, error.line, error.text);
+		                  "Error reading JSON file (%d): %s",
+		                  error.line, error.text);
 		return NULL;
+	}
+
+	format_ver = get_int_val(root, "format_version");
+
+	if (format_ver != RTMP_SERVICES_FORMAT_VERSION) {
+		blog(LOG_WARNING, "rtmp-common.c: [open_json_file] "
+		                  "Wrong format version (%d), expected %d",
+				  format_ver, RTMP_SERVICES_FORMAT_VERSION);
+		json_decref(root);
+		return NULL;
+	}
+
+	list = json_object_get(root, "services");
+	if (list)
+		json_incref(list);
+	json_decref(root);
+
+	if (!list) {
+		blog(LOG_WARNING, "rtmp-common.c: [open_json_file] "
+		                  "No services list");
+		return NULL;
+	}
+
+	return list;
+}
+
+static json_t *open_services_file(void)
+{
+	char *file;
+	json_t *root = NULL;
+
+	file = obs_module_config_path("services.json");
+	if (file) {
+		root = open_json_file(file);
+		bfree(file);
+	}
+
+	if (!root) {
+		file = obs_module_file("services.json");
+		if (file) {
+			root = open_json_file(file);
+			bfree(file);
+		}
 	}
 
 	return root;
 }
 
-static json_t *build_service_list(obs_property_t *list, const char *file)
+static void build_service_list(obs_property_t *list, json_t *root,
+		bool show_all, const char *cur_service)
 {
-	json_t *root = open_json_file(file);
-	add_services(list, file, root);
-	return root;
+	obs_property_list_clear(list);
+	add_services(list, root, show_all, cur_service);
 }
 
 static void properties_data_destroy(void *data)
@@ -197,25 +271,45 @@ static bool service_selected(obs_properties_t *props, obs_property_t *p,
 	return true;
 }
 
+static bool show_all_services_toggled(obs_properties_t *ppts,
+		obs_property_t *p, obs_data_t *settings)
+{
+	const char *cur_service = obs_data_get_string(settings, "service");
+	bool show_all = obs_data_get_bool(settings, "show_all");
+
+	json_t *root = obs_properties_get_param(ppts);
+	if (!root)
+		return false;
+
+	build_service_list(obs_properties_get(ppts, "service"), root, show_all,
+			cur_service);
+
+	UNUSED_PARAMETER(p);
+	return true;
+}
+
 static obs_properties_t *rtmp_common_properties(void *unused)
 {
 	UNUSED_PARAMETER(unused);
 
 	obs_properties_t *ppts = obs_properties_create();
-	obs_property_t   *list;
-	char             *file;
+	obs_property_t   *p;
+	json_t           *root;
 
-	list = obs_properties_add_list(ppts, "service",
+	root = open_services_file();
+	if (root)
+		obs_properties_set_param(ppts, root, properties_data_destroy);
+
+	p = obs_properties_add_list(ppts, "service",
 			obs_module_text("Service"),
 			OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 
-	file = obs_module_file("services.json");
-	if (file) {
-		json_t *root = build_service_list(list, file);
-		obs_properties_set_param(ppts, root, properties_data_destroy);
-		obs_property_set_modified_callback(list, service_selected);
-		bfree(file);
-	}
+	obs_property_set_modified_callback(p, service_selected);
+
+	p = obs_properties_add_bool(ppts, "show_all",
+			obs_module_text("ShowAll"));
+
+	obs_property_set_modified_callback(p, show_all_services_toggled);
 
 	obs_properties_add_list(ppts, "server", obs_module_text("Server"),
 			OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
@@ -234,11 +328,7 @@ static void apply_video_encoder_settings(obs_data_t *settings,
 		obs_data_set_int(settings, "keyint_sec", keyint);
 	}
 
-	item = json_object_get(recommended, "cbr");
-	if (item && json_is_boolean(item)) {
-		bool cbr = json_is_true(item);
-		obs_data_set_bool(settings, "cbr", cbr);
-	}
+	obs_data_set_bool(settings, "cbr", true);
 
 	item = json_object_get(recommended, "profile");
 	if (item && json_is_string(item)) {
@@ -294,17 +384,12 @@ static void rtmp_common_apply_settings(void *data,
 		obs_data_t *video_settings, obs_data_t *audio_settings)
 {
 	struct rtmp_common *service = data;
-	char               *file;
+	json_t             *root = open_services_file();
 
-	file = obs_module_file("services.json");
-	if (file) {
-		json_t *root = open_json_file(file);
-		if (root) {
-			initialize_output(service, root, video_settings,
-					audio_settings);
-			json_decref(root);
-		}
-		bfree(file);
+	if (root) {
+		initialize_output(service, root, video_settings,
+				audio_settings);
+		json_decref(root);
 	}
 }
 

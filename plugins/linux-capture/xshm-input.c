@@ -132,8 +132,9 @@ static int_fast32_t xshm_update_geometry(struct xshm_data *data)
 /**
  * Returns the name of the plugin
  */
-static const char* xshm_getname(void)
+static const char* xshm_getname(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return obs_module_text("X11SharedMemoryScreenInput");
 }
 
@@ -431,7 +432,7 @@ static void xshm_video_render(void *vptr, gs_effect_t *effect)
 {
 	XSHM_DATA(vptr);
 
-	effect = obs_get_opaque_effect();
+	effect = obs_get_base_effect(OBS_EFFECT_OPAQUE);
 
 	if (!data->texture)
 		return;
@@ -444,7 +445,7 @@ static void xshm_video_render(void *vptr, gs_effect_t *effect)
 	}
 
 	if (data->show_cursor) {
-		effect = obs_get_default_effect();
+		effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
 
 		while (gs_effect_loop(effect, "Draw")) {
 			xcb_xcursor_render(data->cursor);

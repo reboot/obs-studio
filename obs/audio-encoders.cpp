@@ -8,11 +8,14 @@
 #include <vector>
 
 #include "audio-encoders.hpp"
+#include "obs-app.hpp"
+#include "window-main.hpp"
 
 using namespace std;
 
 static const string encoders[] = {
 	"ffmpeg_aac",
+	"mf_aac",
 	"libfdk_aac",
 	"CoreAudio_AAC",
 };
@@ -54,10 +57,45 @@ static void HandleListProperty(obs_property_t *prop, const char *id)
 
 	const size_t count = obs_property_list_item_count(prop);
 	for (size_t i = 0; i < count; i++) {
+		if (obs_property_list_item_disabled(prop, i))
+			continue;
+
 		int bitrate = static_cast<int>(
 				obs_property_list_item_int(prop, i));
 		bitrateMap[bitrate] = id;
 	}
+}
+
+static void HandleSampleRate(obs_property_t* prop, const char *id)
+{
+	auto ReleaseData = [](obs_data_t *data)
+	{
+		obs_data_release(data);
+	};
+	std::unique_ptr<obs_data_t, decltype(ReleaseData)> data{
+			obs_encoder_defaults(id),
+			ReleaseData};
+
+	if (!data) {
+		blog(LOG_ERROR, "Failed to get defaults for encoder '%s' (%s) "
+				"while populating bitrate map",
+				EncoderName(id), id);
+		return;
+	}
+
+	auto main = reinterpret_cast<OBSMainWindow*>(App()->GetMainWindow());
+	if (!main) {
+		blog(LOG_ERROR, "Failed to get main window while populating "
+				"bitrate map");
+		return;
+	}
+
+	uint32_t sampleRate = config_get_uint(main->Config(), "Audio",
+			"SampleRate");
+
+	obs_data_set_int(data.get(), "samplerate", sampleRate);
+
+	obs_property_modified(prop, data.get());
 }
 
 static void HandleEncoderProperties(const char *id)
@@ -76,6 +114,11 @@ static void HandleEncoderProperties(const char *id)
 				EncoderName(id), id);
 		return;
 	}
+
+	obs_property_t *samplerate = obs_properties_get(props.get(),
+			"samplerate");
+	if (samplerate)
+		HandleSampleRate(samplerate, id);
 
 	obs_property_t *bitrate = obs_properties_get(props.get(), "bitrate");
 
@@ -164,4 +207,31 @@ const char *GetAACEncoderForBitrate(int bitrate)
 	if (res == end(map_))
 		return NULL;
 	return res->second;
+}
+
+#define INVALID_BITRATE 10000
+
+int FindClosestAvailableAACBitrate(int bitrate)
+{
+	auto &map_ = GetAACEncoderBitrateMap();
+	int prev = 0;
+	int next = INVALID_BITRATE;
+
+	for (auto val : map_) {
+		if (next > val.first) {
+			if (val.first == bitrate)
+				return bitrate;
+
+			if (val.first < next && val.first > bitrate)
+				next = val.first;
+			if (val.first > prev && val.first < bitrate)
+				prev = val.first;
+		}
+	}
+
+	if (next != INVALID_BITRATE)
+		return next;
+	if (prev != 0)
+		return prev;
+	return 192;
 }

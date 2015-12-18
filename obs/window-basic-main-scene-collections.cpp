@@ -48,11 +48,8 @@ template <typename Func> static void EnumSceneCollections(Func &&cb)
 		if (glob->gl_pathv[i].directory)
 			continue;
 
-		BPtr<char> fileData = os_quick_read_utf8_file(filePath);
-		if (!fileData)
-			continue;
-
-		obs_data_t *data = obs_data_create_from_json(fileData);
+		obs_data_t *data = obs_data_create_from_json_file_safe(filePath,
+				"bak");
 		std::string name = obs_data_get_string(data, "name");
 
 		/* if no name found, use the file name as the name
@@ -161,22 +158,22 @@ void OBSBasic::AddSceneCollection(bool create_new)
 	if (!GetSceneCollectionName(this, name, file))
 		return;
 
-	SaveProject();
+	SaveProjectNow();
 
 	config_set_string(App()->GlobalConfig(), "Basic", "SceneCollection",
 			name.c_str());
 	config_set_string(App()->GlobalConfig(), "Basic", "SceneCollectionFile",
 			file.c_str());
 	if (create_new) {
-		CreateDefaultScene();
+		CreateDefaultScene(false);
 	}
-	SaveProject();
+	SaveProjectNow();
 	RefreshSceneCollections();
 
-	blog(LOG_INFO, "------------------------------------------------");
 	blog(LOG_INFO, "Added scene collection '%s' (%s, %s.json)",
 			name.c_str(), create_new ? "clean" : "duplicate",
 			file.c_str());
+	blog(LOG_INFO, "------------------------------------------------");
 
 	UpdateTitleBar();
 }
@@ -246,7 +243,7 @@ void OBSBasic::on_actionRenameSceneCollection_triggered()
 			name.c_str());
 	config_set_string(App()->GlobalConfig(), "Basic", "SceneCollectionFile",
 			file.c_str());
-	SaveProject();
+	SaveProjectNow();
 
 	char path[512];
 	int ret = GetConfigPath(path, 512, "obs-studio/basic/scenes/");
@@ -262,6 +259,7 @@ void OBSBasic::on_actionRenameSceneCollection_triggered()
 	blog(LOG_INFO, "------------------------------------------------");
 	blog(LOG_INFO, "Renamed scene collection to '%s' (%s.json)",
 			name.c_str(), file.c_str());
+	blog(LOG_INFO, "------------------------------------------------");
 
 	UpdateTitleBar();
 	RefreshSceneCollections();
@@ -312,6 +310,8 @@ void OBSBasic::on_actionRemoveSceneCollection_triggered()
 	oldFile.insert(0, path);
 	oldFile += ".json";
 	os_unlink(oldFile.c_str());
+	oldFile += ".bak";
+	os_unlink(oldFile.c_str());
 
 	Load(newPath.c_str());
 	RefreshSceneCollections();
@@ -319,11 +319,11 @@ void OBSBasic::on_actionRemoveSceneCollection_triggered()
 	const char *newFile = config_get_string(App()->GlobalConfig(),
 			"Basic", "SceneCollectionFile");
 
-	blog(LOG_INFO, "------------------------------------------------");
 	blog(LOG_INFO, "Removed scene collection '%s' (%s.json), "
 			"switched to '%s' (%s.json)",
 			oldName.c_str(), oldFile.c_str(),
 			newName.c_str(), newFile);
+	blog(LOG_INFO, "------------------------------------------------");
 
 	UpdateTitleBar();
 }
@@ -347,7 +347,7 @@ void OBSBasic::ChangeSceneCollection()
 		return;
 	}
 
-	SaveProject();
+	SaveProjectNow();
 
 	Load(fileName.c_str());
 	RefreshSceneCollections();
@@ -357,9 +357,9 @@ void OBSBasic::ChangeSceneCollection()
 	const char *newFile = config_get_string(App()->GlobalConfig(),
 			"Basic", "SceneCollectionFile");
 
-	blog(LOG_INFO, "------------------------------------------------");
 	blog(LOG_INFO, "Switched to scene collection '%s' (%s.json)",
 			newName, newFile);
+	blog(LOG_INFO, "------------------------------------------------");
 
 	UpdateTitleBar();
 }

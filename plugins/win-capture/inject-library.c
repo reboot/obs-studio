@@ -23,7 +23,7 @@ int inject_library_obf(HANDLE process, const wchar_t *dll,
 	bool success = false;
 	size_t written_size;
 	DWORD thread_id;
-	HANDLE thread;
+	HANDLE thread = NULL;
 	size_t size;
 	void *mem;
 
@@ -50,8 +50,7 @@ int inject_library_obf(HANDLE process, const wchar_t *dll,
 	/* -------------------------------- */
 
 	size = (wcslen(dll) + 1) * sizeof(wchar_t);
-	mem = virtual_alloc_ex(process, NULL, size, MEM_COMMIT,
-			PAGE_EXECUTE_READWRITE);
+	mem = virtual_alloc_ex(process, NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 	if (!mem) {
 		goto fail;
 	}

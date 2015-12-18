@@ -19,24 +19,23 @@
 
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <memory>
+#include <QPointer>
+#include "qt-display.hpp"
 #include <obs.hpp>
 
 class OBSPropertiesView;
 class OBSBasic;
 
-#include "ui_OBSBasicProperties.h"
-
 class OBSBasicProperties : public QDialog {
 	Q_OBJECT
 
 private:
+	QPointer<OBSQTDisplay> preview;
+
 	OBSBasic   *main;
 	bool       acceptClicked;
 
-	std::unique_ptr<Ui::OBSBasicProperties> ui;
 	OBSSource  source;
-	OBSDisplay display;
 	OBSSignal  removedSignal;
 	OBSSignal  renamedSignal;
 	OBSSignal  updatePropertiesSignal;
@@ -53,7 +52,6 @@ private:
 	void Cleanup();
 
 private slots:
-	void OnPropertiesResized();
 	void on_buttonBox_clicked(QAbstractButton *button);
 
 public:
@@ -63,7 +61,6 @@ public:
 	void Init();
 
 protected:
-	virtual void resizeEvent(QResizeEvent *event) override;
 	virtual void closeEvent(QCloseEvent *event) override;
 	virtual void reject() override;
 };

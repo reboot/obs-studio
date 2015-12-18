@@ -9,6 +9,7 @@ protected:
 	DeckLink                *decklink = nullptr;
 	DeckLinkDevice          *device = nullptr;
 	DeckLinkDeviceMode      *mode = nullptr;
+	BMDPixelFormat          pixelFormat = bmdFormat8BitYUV;
 	ComPtr<IDeckLinkInput>  input;
 	volatile long           refCount = 1;
 
@@ -19,12 +20,15 @@ protected:
 
 public:
 	DeckLinkDeviceInstance(DeckLink *decklink, DeckLinkDevice *device);
+	virtual ~DeckLinkDeviceInstance();
 
 	inline DeckLinkDevice *GetDevice() const {return device;}
 	inline long long GetActiveModeId() const
 	{
 		return mode ? mode->GetId() : 0;
 	}
+
+	inline BMDPixelFormat GetActivePixelFormat() const {return pixelFormat;}
 
 	inline DeckLinkDeviceMode *GetMode() const {return mode;}
 

@@ -45,8 +45,9 @@ struct color_key_filter_data {
 	float                          smoothness;
 };
 
-static const char *color_key_name(void)
+static const char *color_key_name(void *unused)
 {
+	UNUSED_PARAMETER(unused);
 	return obs_module_text("ColorKeyFilter");
 }
 
@@ -131,7 +132,7 @@ static void *color_key_create(obs_data_t *settings, obs_source_t *context)
 	obs_enter_graphics();
 
 	filter->effect = gs_effect_create_from_file(effect_path, NULL);
-	if (filter) {
+	if (filter->effect) {
 		filter->color_param = gs_effect_get_param_by_name(
 				filter->effect, "color");
 		filter->contrast_param = gs_effect_get_param_by_name(

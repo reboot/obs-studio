@@ -36,7 +36,7 @@ struct obs_output_info {
 
 	uint32_t flags;
 
-	const char *(*get_name)(void);
+	const char *(*get_name)(void *type_data);
 
 	void *(*create)(obs_data_t *settings, obs_output_t *output);
 	void (*destroy)(void *data);
@@ -61,6 +61,9 @@ struct obs_output_info {
 	uint64_t (*get_total_bytes)(void *data);
 
 	int (*get_dropped_frames)(void *data);
+
+	void *type_data;
+	void (*free_type_data)(void *type_data);
 };
 
 EXPORT void obs_register_output_s(const struct obs_output_info *info,

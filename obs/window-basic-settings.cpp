@@ -19,6 +19,7 @@
 #include <obs.hpp>
 #include <util/util.hpp>
 #include <util/lexer.h>
+#include <graphics/math-defs.h>
 #include <initializer_list>
 #include <sstream>
 #include <QLineEdit>
@@ -265,22 +266,16 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->outputMode,           COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->streamType,           COMBO_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->simpleOutputPath,     EDIT_CHANGED,   OUTPUTS_CHANGED);
+	HookWidget(ui->simpleNoSpace,        CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecFormat,   COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutputVBitrate, SCROLL_CHANGED, OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutputABitrate, COMBO_CHANGED,  OUTPUTS_CHANGED);
-	HookWidget(ui->simpleOutReconnect,   CHECK_CHANGED,  OUTPUTS_CHANGED);
-	HookWidget(ui->simpleOutRetryDelay,  SCROLL_CHANGED, OUTPUTS_CHANGED);
-	HookWidget(ui->simpleOutMaxRetries,  SCROLL_CHANGED, OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutAdvanced,    CHECK_CHANGED,  OUTPUTS_CHANGED);
-	HookWidget(ui->simpleOutUseCBR,      CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutPreset,      COMBO_CHANGED,  OUTPUTS_CHANGED);
-	HookWidget(ui->simpleOutUseBufsize,  CHECK_CHANGED,  OUTPUTS_CHANGED);
-	HookWidget(ui->simpleOutPreset,      COMBO_CHANGED,  OUTPUTS_CHANGED);
-	HookWidget(ui->simpleOutVBufsize,    SCROLL_CHANGED, OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutCustom,      EDIT_CHANGED,   OUTPUTS_CHANGED);
-	HookWidget(ui->advOutReconnect,      CHECK_CHANGED,  OUTPUTS_CHANGED);
-	HookWidget(ui->advOutRetryDelay,     SCROLL_CHANGED, OUTPUTS_CHANGED);
-	HookWidget(ui->advOutMaxRetries,     SCROLL_CHANGED, OUTPUTS_CHANGED);
+	HookWidget(ui->simpleOutRecQuality,  COMBO_CHANGED,  OUTPUTS_CHANGED);
+	HookWidget(ui->simpleOutRecEncoder,  COMBO_CHANGED,  OUTPUTS_CHANGED);
+	HookWidget(ui->simpleOutMuxCustom,   EDIT_CHANGED,   OUTPUTS_CHANGED);
 	HookWidget(ui->advOutEncoder,        COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutUseRescale,     CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRescale,        CBEDIT_CHANGED, OUTPUTS_CHANGED);
@@ -291,16 +286,22 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->advOutApplyService,   CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecType,        COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecPath,        EDIT_CHANGED,   OUTPUTS_CHANGED);
+	HookWidget(ui->advOutNoSpace,        CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecFormat,      COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecEncoder,     COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecUseRescale,  CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecRescale,     CBEDIT_CHANGED, OUTPUTS_CHANGED);
+	HookWidget(ui->advOutMuxCustom,      EDIT_CHANGED,   OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecTrack1,      CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecTrack2,      CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecTrack3,      CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutRecTrack4,      CHECK_CHANGED,  OUTPUTS_CHANGED);
+	HookWidget(ui->advOutFFType,         COMBO_CHANGED,  OUTPUTS_CHANGED);
+	HookWidget(ui->advOutFFRecPath,      EDIT_CHANGED,   OUTPUTS_CHANGED);
+	HookWidget(ui->advOutFFNoSpace,      CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutFFURL,          EDIT_CHANGED,   OUTPUTS_CHANGED);
 	HookWidget(ui->advOutFFFormat,       COMBO_CHANGED,  OUTPUTS_CHANGED);
+	HookWidget(ui->advOutFFMCfg,         EDIT_CHANGED,   OUTPUTS_CHANGED);
 	HookWidget(ui->advOutFFVBitrate,     SCROLL_CHANGED, OUTPUTS_CHANGED);
 	HookWidget(ui->advOutFFUseRescale,   CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->advOutFFRescale,      CBEDIT_CHANGED, OUTPUTS_CHANGED);
@@ -343,6 +344,12 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->colorFormat,          COMBO_CHANGED,  ADV_CHANGED);
 	HookWidget(ui->colorSpace,           COMBO_CHANGED,  ADV_CHANGED);
 	HookWidget(ui->colorRange,           COMBO_CHANGED,  ADV_CHANGED);
+	HookWidget(ui->streamDelayEnable,    CHECK_CHANGED,  ADV_CHANGED);
+	HookWidget(ui->streamDelaySec,       SCROLL_CHANGED, ADV_CHANGED);
+	HookWidget(ui->streamDelayPreserve,  CHECK_CHANGED,  ADV_CHANGED);
+	HookWidget(ui->reconnectEnable,      CHECK_CHANGED,  ADV_CHANGED);
+	HookWidget(ui->reconnectRetryDelay,  SCROLL_CHANGED, ADV_CHANGED);
+	HookWidget(ui->reconnectMaxRetries,  SCROLL_CHANGED, ADV_CHANGED);
 
 #ifdef _WIN32
 	uint32_t winVer = GetWindowsVersion();
@@ -359,6 +366,23 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 				this, &OBSBasicSettings::ToggleDisableAero);
 	}
 #endif
+
+	connect(ui->streamDelaySec, SIGNAL(valueChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
+	connect(ui->outputMode, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
+	connect(ui->simpleOutputVBitrate, SIGNAL(valueChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
+	connect(ui->simpleOutputABitrate, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
+	connect(ui->advOutTrack1Bitrate, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
+	connect(ui->advOutTrack2Bitrate, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
+	connect(ui->advOutTrack3Bitrate, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
+	connect(ui->advOutTrack4Bitrate, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(UpdateStreamDelayEstimate()));
 
 	//Apply button disabled until change.
 	EnableApplyButton(false);
@@ -378,6 +402,9 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 		auto settings = static_cast<OBSBasicSettings*>(data);
 		auto source   = static_cast<obs_source_t*>(calldata_ptr(param,
 					"source"));
+
+		if (!source)
+			return;
 
 		if (!(obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO))
 			return;
@@ -409,6 +436,14 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	hotkeyUnregistered.Connect(obs_get_signal_handler(),
 			"hotkey_unregister", ReloadHotkeysIgnore, this);
 
+	FillSimpleRecordingValues();
+	connect(ui->simpleOutRecQuality, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(SimpleRecordingQualityChanged()));
+	connect(ui->simpleOutRecQuality, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(SimpleRecordingQualityLosslessWarning(int)));
+	connect(ui->simpleOutRecEncoder, SIGNAL(currentIndexChanged(int)),
+			this, SLOT(SimpleRecordingEncoderChanged()));
+
 	LoadSettings(false);
 
 	// Add warning checks to advanced output recording section controls
@@ -421,6 +456,8 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	connect(ui->advOutRecTrack4, SIGNAL(clicked()),
 			this, SLOT(AdvOutRecCheckWarnings()));
 	AdvOutRecCheckWarnings();
+
+	SimpleRecordingQualityChanged();
 }
 
 void OBSBasicSettings::SaveCombo(QComboBox *widget, const char *section,
@@ -788,15 +825,24 @@ void OBSBasicSettings::ResetDownscales(uint32_t cx, uint32_t cy,
 	QString advRescale;
 	QString advRecRescale;
 	QString advFFRescale;
+	QString oldOutputRes;
+	string bestScale;
+	int bestPixelDiff = 0x7FFFFFFF;
 
 	advRescale = ui->advOutRescale->lineEdit()->text();
 	advRecRescale = ui->advOutRecRescale->lineEdit()->text();
 	advFFRescale = ui->advOutFFRescale->lineEdit()->text();
+	oldOutputRes = ui->outputResolution->lineEdit()->text();
 
 	ui->outputResolution->clear();
 	ui->advOutRescale->clear();
 	ui->advOutRecRescale->clear();
 	ui->advOutFFRescale->clear();
+
+	if (!out_cx || !out_cy) {
+		out_cx = cx;
+		out_cy = cy;
+	}
 
 	for (size_t idx = 0; idx < numVals; idx++) {
 		uint32_t downscaleCX = uint32_t(double(cx) / vals[idx]);
@@ -815,11 +861,28 @@ void OBSBasicSettings::ResetDownscales(uint32_t cx, uint32_t cy,
 		ui->advOutRescale->addItem(outRes.c_str());
 		ui->advOutRecRescale->addItem(outRes.c_str());
 		ui->advOutFFRescale->addItem(outRes.c_str());
+
+		/* always try to find the closest output resolution to the
+		 * previously set output resolution */
+		int newPixelCount = int(downscaleCX * downscaleCY);
+		int oldPixelCount = int(out_cx * out_cy);
+		int diff = abs(newPixelCount - oldPixelCount);
+
+		if (diff < bestPixelDiff) {
+			bestScale = res;
+			bestPixelDiff = diff;
+		}
 	}
 
 	string res = ResString(cx, cy);
 
-	ui->outputResolution->lineEdit()->setText(res.c_str());
+	float baseAspect   = float(cx) / float(cy);
+	float outputAspect = float(out_cx) / float(out_cy);
+
+	if (close_float(baseAspect, outputAspect, 0.01f))
+		ui->outputResolution->lineEdit()->setText(oldOutputRes);
+	else
+		ui->outputResolution->lineEdit()->setText(bestScale.c_str());
 
 	if (advRescale.isEmpty())
 		advRescale = res.c_str();
@@ -951,36 +1014,32 @@ void OBSBasicSettings::LoadSimpleOutputSettings()
 {
 	const char *path = config_get_string(main->Config(), "SimpleOutput",
 			"FilePath");
+	bool noSpace = config_get_bool(main->Config(), "SimpleOutput",
+			"FileNameWithoutSpace");
 	const char *format = config_get_string(main->Config(), "SimpleOutput",
 			"RecFormat");
 	int videoBitrate = config_get_uint(main->Config(), "SimpleOutput",
 			"VBitrate");
-	int videoBufsize = config_get_uint(main->Config(), "SimpleOutput",
-			"VBufsize");
 	int audioBitrate = config_get_uint(main->Config(), "SimpleOutput",
 			"ABitrate");
-	bool reconnect = config_get_bool(main->Config(), "SimpleOutput",
-			"Reconnect");
-	int retryDelay = config_get_uint(main->Config(), "SimpleOutput",
-			"RetryDelay");
-	int maxRetries = config_get_uint(main->Config(), "SimpleOutput",
-			"MaxRetries");
 	bool advanced = config_get_bool(main->Config(), "SimpleOutput",
 			"UseAdvanced");
-	bool useCBR = config_get_bool(main->Config(), "SimpleOutput",
-			"UseCBR");
-	bool useBufsize = config_get_bool(main->Config(), "SimpleOutput",
-			"UseBufsize");
 	const char *preset = config_get_string(main->Config(), "SimpleOutput",
 			"Preset");
 	const char *custom = config_get_string(main->Config(), "SimpleOutput",
 			"x264Settings");
+	const char *recQual = config_get_string(main->Config(), "SimpleOutput",
+			"RecQuality");
+	const char *recEnc = config_get_string(main->Config(), "SimpleOutput",
+			"RecEncoder");
+	const char *muxCustom = config_get_string(main->Config(),
+			"SimpleOutput", "MuxerCustom");
+
+	audioBitrate = FindClosestAvailableAACBitrate(audioBitrate);
 
 	ui->simpleOutputPath->setText(path);
+	ui->simpleNoSpace->setChecked(noSpace);
 	ui->simpleOutputVBitrate->setValue(videoBitrate);
-	ui->simpleOutUseBufsize->setChecked(useBufsize);
-	ui->simpleOutVBufsize->setValue(
-			useBufsize ? videoBufsize : videoBitrate);
 
 	int idx = ui->simpleOutRecFormat->findText(format);
 	ui->simpleOutRecFormat->setCurrentIndex(idx);
@@ -988,23 +1047,23 @@ void OBSBasicSettings::LoadSimpleOutputSettings()
 	SetComboByName(ui->simpleOutputABitrate,
 			std::to_string(audioBitrate).c_str());
 
-	ui->simpleOutReconnect->setChecked(reconnect);
-	ui->simpleOutRetryDelay->setValue(retryDelay);
-	ui->simpleOutMaxRetries->setValue(maxRetries);
 	ui->simpleOutAdvanced->setChecked(advanced);
-	ui->simpleOutUseCBR->setChecked(useCBR);
 	ui->simpleOutPreset->setCurrentText(preset);
 	ui->simpleOutCustom->setText(custom);
+
+	idx = ui->simpleOutRecQuality->findData(QString(recQual));
+	if (idx == -1) idx = 0;
+	ui->simpleOutRecQuality->setCurrentIndex(idx);
+
+	idx = ui->simpleOutRecEncoder->findData(QString(recEnc));
+	if (idx == -1) idx = 0;
+	ui->simpleOutRecEncoder->setCurrentIndex(idx);
+
+	ui->simpleOutMuxCustom->setText(muxCustom);
 }
 
 void OBSBasicSettings::LoadAdvOutputStreamingSettings()
 {
-	bool reconnect = config_get_bool(main->Config(), "AdvOut",
-			"Reconnect");
-	int retryDelay = config_get_int(main->Config(), "AdvOut",
-			"RetryDelay");
-	int maxRetries = config_get_int(main->Config(), "AdvOut",
-			"MaxRetries");
 	bool rescale = config_get_bool(main->Config(), "AdvOut",
 			"Rescale");
 	const char *rescaleRes = config_get_string(main->Config(), "AdvOut",
@@ -1014,9 +1073,6 @@ void OBSBasicSettings::LoadAdvOutputStreamingSettings()
 	bool applyServiceSettings = config_get_bool(main->Config(), "AdvOut",
 			"ApplyServiceSettings");
 
-	ui->advOutReconnect->setChecked(reconnect);
-	ui->advOutRetryDelay->setValue(retryDelay);
-	ui->advOutMaxRetries->setValue(maxRetries);
 	ui->advOutApplyService->setChecked(applyServiceSettings);
 	ui->advOutUseRescale->setChecked(rescale);
 	ui->advOutRescale->setEnabled(rescale);
@@ -1040,12 +1096,10 @@ OBSPropertiesView *OBSBasicSettings::CreateEncoderPropertyView(
 	int ret = GetProfilePath(encoderJsonPath, sizeof(encoderJsonPath),
 			path);
 	if (ret > 0) {
-		BPtr<char> jsonData = os_quick_read_utf8_file(encoderJsonPath);
-		if (!!jsonData) {
-			obs_data_t *data = obs_data_create_from_json(jsonData);
-			obs_data_apply(settings, data);
-			obs_data_release(data);
-		}
+		obs_data_t *data = obs_data_create_from_json_file_safe(
+				encoderJsonPath, "bak");
+		obs_data_apply(settings, data);
+		obs_data_release(data);
 	}
 
 	view = new OBSPropertiesView(settings, encoder,
@@ -1069,7 +1123,12 @@ void OBSBasicSettings::LoadAdvOutputStreamingEncoderProperties()
 			"streamEncoder.json");
 	ui->advOutputStreamTab->layout()->addWidget(streamEncoderProps);
 
+	connect(streamEncoderProps, SIGNAL(Changed()),
+			this, SLOT(UpdateStreamDelayEstimate()));
+
 	SetComboByValue(ui->advOutEncoder, encoder);
+
+	UpdateStreamDelayEstimate();
 }
 
 void OBSBasicSettings::LoadAdvOutputRecordingSettings()
@@ -1080,17 +1139,23 @@ void OBSBasicSettings::LoadAdvOutputRecordingSettings()
 			"RecFormat");
 	const char *path = config_get_string(main->Config(), "AdvOut",
 			"RecFilePath");
+	bool noSpace = config_get_bool(main->Config(), "AdvOut",
+			"RecFileNameWithoutSpace");
 	bool rescale = config_get_bool(main->Config(), "AdvOut",
 			"RecRescale");
 	const char *rescaleRes = config_get_string(main->Config(), "AdvOut",
 			"RecRescaleRes");
+	const char *muxCustom = config_get_string(main->Config(), "AdvOut",
+			"RecMuxerCustom");
 	int tracks = config_get_int(main->Config(), "AdvOut", "RecTracks");
 
 	int typeIndex = (astrcmpi(type, "FFmpeg") == 0) ? 1 : 0;
 	ui->advOutRecType->setCurrentIndex(typeIndex);
 	ui->advOutRecPath->setText(path);
+	ui->advOutNoSpace->setChecked(noSpace);
 	ui->advOutRecUseRescale->setChecked(rescale);
 	ui->advOutRecRescale->setCurrentText(rescaleRes);
+	ui->advOutMuxCustom->setText(muxCustom);
 
 	int idx = ui->advOutRecFormat->findText(format);
 	ui->advOutRecFormat->setCurrentIndex(idx);
@@ -1145,11 +1210,19 @@ static void SelectEncoder(QComboBox *combo, const char *name, int id)
 
 void OBSBasicSettings::LoadAdvOutputFFmpegSettings()
 {
+	bool saveFile = config_get_bool(main->Config(), "AdvOut",
+			"FFOutputToFile");
+	const char *path = config_get_string(main->Config(), "AdvOut",
+			"FFFilePath");
+	bool noSpace = config_get_bool(main->Config(), "AdvOut",
+			"FFFileNameWithoutSpace");
 	const char *url = config_get_string(main->Config(), "AdvOut", "FFURL");
 	const char *format = config_get_string(main->Config(), "AdvOut",
 			"FFFormat");
 	const char *mimeType = config_get_string(main->Config(), "AdvOut",
 			"FFFormatMimeType");
+	const char *muxCustom = config_get_string(main->Config(), "AdvOut",
+			"FFMCustom");
 	int videoBitrate = config_get_int(main->Config(), "AdvOut",
 			"FFVBitrate");
 	bool rescale = config_get_bool(main->Config(), "AdvOut",
@@ -1173,8 +1246,12 @@ void OBSBasicSettings::LoadAdvOutputFFmpegSettings()
 	const char *aEncCustom = config_get_string(main->Config(), "AdvOut",
 			"FFACustom");
 
-	ui->advOutFFURL->setText(url);
+	ui->advOutFFType->setCurrentIndex(saveFile ? 0 : 1);
+	ui->advOutFFRecPath->setText(QT_UTF8(path));
+	ui->advOutFFNoSpace->setChecked(noSpace);
+	ui->advOutFFURL->setText(QT_UTF8(url));
 	SelectFormat(ui->advOutFFFormat, format, mimeType);
+	ui->advOutFFMCfg->setText(muxCustom);
 	ui->advOutFFVBitrate->setValue(videoBitrate);
 	ui->advOutFFUseRescale->setChecked(rescale);
 	ui->advOutFFRescale->setEnabled(rescale);
@@ -1211,6 +1288,11 @@ void OBSBasicSettings::LoadAdvOutputAudioSettings()
 			"Track3Name");
 	const char *name4 = config_get_string(main->Config(), "AdvOut",
 			"Track4Name");
+
+	track1Bitrate = FindClosestAvailableAACBitrate(track1Bitrate);
+	track2Bitrate = FindClosestAvailableAACBitrate(track2Bitrate);
+	track3Bitrate = FindClosestAvailableAACBitrate(track3Bitrate);
+	track4Bitrate = FindClosestAvailableAACBitrate(track4Bitrate);
 
 	SetComboByName(ui->advOutTrack1Bitrate,
 			std::to_string(track1Bitrate).c_str());
@@ -1296,9 +1378,14 @@ void OBSBasicSettings::LoadListValues(QComboBox *widget, obs_property_t *prop,
 	size_t count = obs_property_list_item_count(prop);
 
 	obs_source_t *source = obs_get_output_source(index);
-	obs_data_t *settings = obs_source_get_settings(source);
+	const char *deviceId = nullptr;
+	obs_data_t *settings = nullptr;
 
-	const char *deviceId = obs_data_get_string(settings, "device_id");
+	if (source) {
+		settings = obs_source_get_settings(source);
+		if (settings)
+			deviceId = obs_data_get_string(settings, "device_id");
+	}
 
 	widget->addItem(QTStr("Disabled"), "disabled");
 
@@ -1308,12 +1395,16 @@ void OBSBasicSettings::LoadListValues(QComboBox *widget, obs_property_t *prop,
 		LoadListValue(widget, name, val);
 	}
 
-	int idx = widget->findData(QVariant(QT_UTF8(deviceId)));
-	if (idx != -1)
-		widget->setCurrentIndex(idx);
+	if (deviceId) {
+		int idx = widget->findData(QVariant(QT_UTF8(deviceId)));
+		if (idx != -1)
+			widget->setCurrentIndex(idx);
+	}
 
-	obs_source_release(source);
-	obs_data_release(settings);
+	if (settings)
+		obs_data_release(settings);
+	if (source)
+		obs_source_release(source);
 }
 
 void OBSBasicSettings::LoadAudioDevices()
@@ -1343,6 +1434,8 @@ void OBSBasicSettings::LoadAudioDevices()
 		obs_properties_destroy(output_props);
 	}
 }
+
+#define NBSP "\xC2\xA0"
 
 void OBSBasicSettings::LoadAudioSources()
 {
@@ -1378,7 +1471,7 @@ void OBSBasicSettings::LoadAudioSources()
 		form->addRow(ptmCB);
 
 		auto ptmSB = new SilentUpdateSpinBox();
-		ptmSB->setSuffix(" ms");
+		ptmSB->setSuffix(NBSP "ms");
 		ptmSB->setRange(0, INT_MAX);
 		ptmSB->setValue(obs_source_get_push_to_mute_delay(source));
 		form->addRow(ptmDelay, ptmSB);
@@ -1389,7 +1482,7 @@ void OBSBasicSettings::LoadAudioSources()
 		form->addRow(pttCB);
 
 		auto pttSB = new SilentUpdateSpinBox();
-		pttSB->setSuffix(" ms");
+		pttSB->setSuffix(NBSP "ms");
 		pttSB->setRange(0, INT_MAX);
 		pttSB->setValue(obs_source_get_push_to_talk_delay(source));
 		form->addRow(pttDelay, pttSB);
@@ -1483,9 +1576,7 @@ void OBSBasicSettings::LoadAudioSettings()
 	loading = true;
 
 	const char *str;
-	if (sampleRate == 22050)
-		str = "22.05khz";
-	else if (sampleRate == 48000)
+	if (sampleRate == 48000)
 		str = "48khz";
 	else
 		str = "44.1khz";
@@ -1515,8 +1606,28 @@ void OBSBasicSettings::LoadAdvancedSettings()
 			"Video", "ColorSpace");
 	const char *videoColorRange = config_get_string(main->Config(),
 			"Video", "ColorRange");
+	bool enableDelay = config_get_bool(main->Config(), "Output",
+			"DelayEnable");
+	int delaySec = config_get_int(main->Config(), "Output",
+			"DelaySec");
+	bool preserveDelay = config_get_bool(main->Config(), "Output",
+			"DelayPreserve");
+	bool reconnect = config_get_bool(main->Config(), "Output",
+			"Reconnect");
+	int retryDelay = config_get_int(main->Config(), "Output",
+			"RetryDelay");
+	int maxRetries = config_get_int(main->Config(), "Output",
+			"MaxRetries");
 
 	loading = true;
+
+	ui->reconnectEnable->setChecked(reconnect);
+	ui->reconnectRetryDelay->setValue(retryDelay);
+	ui->reconnectMaxRetries->setValue(maxRetries);
+
+	ui->streamDelaySec->setValue(delaySec);
+	ui->streamDelayPreserve->setChecked(preserveDelay);
+	ui->streamDelayEnable->setChecked(enableDelay);
 
 	ui->audioBufferingTime->setValue(audioBufferingTime);
 	SetComboByName(ui->colorFormat, videoColorFormat);
@@ -1800,7 +1911,7 @@ void OBSBasicSettings::LoadHotkeySettings(obs_hotkey_id ignoreKey)
 				OBSHotkeyLabel *other, const QString &otherName)
 		{
 			label->setToolTip(tt.arg(otherName));
-			label->setText(name + " ✳");
+			label->setText(name + " *");
 			label->pairPartner = other;
 		};
 		Update(label1, name1, label2, name2);
@@ -1921,6 +2032,12 @@ void OBSBasicSettings::SaveAdvancedSettings()
 	SaveCombo(ui->colorFormat, "Video", "ColorFormat");
 	SaveCombo(ui->colorSpace, "Video", "ColorSpace");
 	SaveComboData(ui->colorRange, "Video", "ColorRange");
+	SaveCheckBox(ui->streamDelayEnable, "Output", "DelayEnable");
+	SaveSpinBox(ui->streamDelaySec, "Output", "DelaySec");
+	SaveCheckBox(ui->streamDelayPreserve, "Output", "DelayPreserve");
+	SaveCheckBox(ui->reconnectEnable, "Output", "Reconnect");
+	SaveSpinBox(ui->reconnectRetryDelay, "Output", "RetryDelay");
+	SaveSpinBox(ui->reconnectMaxRetries, "Output", "MaxRetries");
 }
 
 static inline const char *OutputModeFromIdx(int idx)
@@ -1950,11 +2067,8 @@ static void WriteJsonData(OBSPropertiesView *view, const char *path)
 	if (ret > 0) {
 		obs_data_t *settings = view->GetSettings();
 		if (settings) {
-			const char *json = obs_data_get_json(settings);
-			if (json && *json) {
-				os_quick_write_utf8_file(full_path, json,
-						strlen(json), false);
-			}
+			obs_data_save_json_safe(settings, full_path,
+					"tmp", "bak");
 		}
 	}
 }
@@ -1981,11 +2095,23 @@ void OBSBasicSettings::SaveFormat(QComboBox *combo)
 				desc.name);
 		config_set_string(main->Config(), "AdvOut", "FFFormatMimeType",
 				desc.mimeType);
+
+		const char *ext = ff_format_desc_extensions(desc.desc);
+		string extStr = ext ? ext : "";
+
+		char *comma = strchr(&extStr[0], ',');
+		if (comma)
+			comma = 0;
+
+		config_set_string(main->Config(), "AdvOut", "FFExtension",
+				extStr.c_str());
 	} else {
 		config_set_string(main->Config(), "AdvOut", "FFFormat",
 				nullptr);
 		config_set_string(main->Config(), "AdvOut", "FFFormatMimeType",
 				nullptr);
+
+		config_remove_value(main->Config(), "AdvOut", "FFExtension");
 	}
 }
 
@@ -2012,22 +2138,15 @@ void OBSBasicSettings::SaveOutputSettings()
 	SaveSpinBox(ui->simpleOutputVBitrate, "SimpleOutput", "VBitrate");
 	SaveCombo(ui->simpleOutputABitrate, "SimpleOutput", "ABitrate");
 	SaveEdit(ui->simpleOutputPath, "SimpleOutput", "FilePath");
+	SaveCheckBox(ui->simpleNoSpace, "SimpleOutput", "FileNameWithoutSpace");
 	SaveCombo(ui->simpleOutRecFormat, "SimpleOutput", "RecFormat");
-	SaveCheckBox(ui->simpleOutReconnect, "SimpleOutput", "Reconnect");
-	SaveSpinBox(ui->simpleOutRetryDelay, "SimpleOutput", "RetryDelay");
-	SaveSpinBox(ui->simpleOutMaxRetries, "SimpleOutput", "MaxRetries");
 	SaveCheckBox(ui->simpleOutAdvanced, "SimpleOutput", "UseAdvanced");
-	SaveCheckBox(ui->simpleOutUseCBR, "SimpleOutput", "UseCBR");
-	SaveCheckBox(ui->simpleOutUseBufsize, "SimpleOutput", "UseBufsize");
 	SaveCombo(ui->simpleOutPreset, "SimpleOutput", "Preset");
 	SaveEdit(ui->simpleOutCustom, "SimpleOutput", "x264Settings");
+	SaveComboData(ui->simpleOutRecQuality, "SimpleOutput", "RecQuality");
+	SaveComboData(ui->simpleOutRecEncoder, "SimpleOutput", "RecEncoder");
+	SaveEdit(ui->simpleOutMuxCustom, "SimpleOutput", "MuxerCustom");
 
-	if (ui->simpleOutUseBufsize->isChecked())
-		SaveSpinBox(ui->simpleOutVBufsize, "SimpleOutput", "VBufsize");
-
-	SaveCheckBox(ui->advOutReconnect, "AdvOut", "Reconnect");
-	SaveSpinBox(ui->advOutRetryDelay, "AdvOut", "RetryDelay");
-	SaveSpinBox(ui->advOutMaxRetries, "AdvOut", "MaxRetries");
 	SaveCheckBox(ui->advOutApplyService, "AdvOut", "ApplyServiceSettings");
 	SaveComboData(ui->advOutEncoder, "AdvOut", "Encoder");
 	SaveCheckBox(ui->advOutUseRescale, "AdvOut", "Rescale");
@@ -2040,10 +2159,12 @@ void OBSBasicSettings::SaveOutputSettings()
 			RecTypeFromIdx(ui->advOutRecType->currentIndex()));
 
 	SaveEdit(ui->advOutRecPath, "AdvOut", "RecFilePath");
+	SaveCheckBox(ui->advOutNoSpace, "AdvOut", "RecFileNameWithoutSpace");
 	SaveCombo(ui->advOutRecFormat, "AdvOut", "RecFormat");
 	SaveComboData(ui->advOutRecEncoder, "AdvOut", "RecEncoder");
 	SaveCheckBox(ui->advOutRecUseRescale, "AdvOut", "RecRescale");
 	SaveCombo(ui->advOutRecRescale, "AdvOut", "RecRescaleRes");
+	SaveEdit(ui->advOutMuxCustom, "AdvOut", "RecMuxerCustom");
 
 	config_set_int(main->Config(), "AdvOut", "RecTracks",
 			(ui->advOutRecTrack1->isChecked() ? (1<<0) : 0) |
@@ -2051,8 +2172,13 @@ void OBSBasicSettings::SaveOutputSettings()
 			(ui->advOutRecTrack3->isChecked() ? (1<<2) : 0) |
 			(ui->advOutRecTrack4->isChecked() ? (1<<3) : 0));
 
+	config_set_bool(main->Config(), "AdvOut", "FFOutputToFile",
+			ui->advOutFFType->currentIndex() == 0 ? true : false);
+	SaveEdit(ui->advOutFFRecPath, "AdvOut", "FFFilePath");
+	SaveCheckBox(ui->advOutFFNoSpace, "AdvOut", "FFFileNameWithoutSpace");
 	SaveEdit(ui->advOutFFURL, "AdvOut", "FFURL");
 	SaveFormat(ui->advOutFFFormat);
+	SaveEdit(ui->advOutFFMCfg, "AdvOut", "FFMCustom");
 	SaveSpinBox(ui->advOutFFVBitrate, "AdvOut", "FFVBitrate");
 	SaveCheckBox(ui->advOutFFUseRescale, "AdvOut", "FFRescale");
 	SaveCombo(ui->advOutFFRescale, "AdvOut", "FFRescaleRes");
@@ -2087,9 +2213,7 @@ void OBSBasicSettings::SaveAudioSettings()
 	const char *channelSetup = (channelSetupIdx == 0) ? "Mono" : "Stereo";
 
 	int sampleRate = 44100;
-	if (sampleRateStr == "22.05khz")
-		sampleRate = 22050;
-	else if (sampleRateStr == "48khz")
+	if (sampleRateStr == "48khz")
 		sampleRate = 48000;
 
 	if (WidgetChanged(ui->sampleRate))
@@ -2167,6 +2291,16 @@ void OBSBasicSettings::SaveHotkeySettings()
 	}
 }
 
+#define MINOR_SEPARATOR \
+	"------------------------------------------------"
+
+static void AddChangedVal(std::string &changed, const char *str)
+{
+	if (changed.size())
+		changed += ", ";
+	changed += str;
+}
+
 void OBSBasicSettings::SaveSettings()
 {
 	if (generalChanged)
@@ -2187,9 +2321,30 @@ void OBSBasicSettings::SaveSettings()
 	if (videoChanged || advancedChanged)
 		main->ResetVideo();
 
-	config_save(main->Config());
-	config_save(GetGlobalConfig());
+	config_save_safe(main->Config(), "tmp", nullptr);
+	config_save_safe(GetGlobalConfig(), "tmp", nullptr);
 	main->SaveProject();
+
+	if (Changed()) {
+		std::string changed;
+		if (generalChanged)
+			AddChangedVal(changed, "general");
+		if (stream1Changed)
+			AddChangedVal(changed, "stream 1");
+		if (outputsChanged)
+			AddChangedVal(changed, "outputs");
+		if (audioChanged)
+			AddChangedVal(changed, "audio");
+		if (videoChanged)
+			AddChangedVal(changed, "video");
+		if (hotkeysChanged)
+			AddChangedVal(changed, "hotkeys");
+		if (advancedChanged)
+			AddChangedVal(changed, "advanced");
+
+		blog(LOG_INFO, "Settings changed (%s)", changed.c_str());
+		blog(LOG_INFO, MINOR_SEPARATOR);
+	}
 }
 
 bool OBSBasicSettings::QueryChanges()
@@ -2230,19 +2385,6 @@ void OBSBasicSettings::on_theme_activated(int idx)
 	App()->SetTheme(currT);
 }
 
-void OBSBasicSettings::on_simpleOutUseBufsize_toggled(bool checked)
-{
-	if (!checked)
-		ui->simpleOutVBufsize->setValue(
-				ui->simpleOutputVBitrate->value());
-}
-
-void OBSBasicSettings::on_simpleOutputVBitrate_valueChanged(int val)
-{
-	if (!ui->simpleOutUseBufsize->isChecked())
-		ui->simpleOutVBufsize->setValue(val);
-}
-
 void OBSBasicSettings::on_listWidget_itemSelectionChanged()
 {
 	int row = ui->listWidget->currentRow();
@@ -2265,8 +2407,13 @@ void OBSBasicSettings::on_buttonBox_clicked(QAbstractButton *button)
 
 	if (val == QDialogButtonBox::AcceptRole ||
 	    val == QDialogButtonBox::RejectRole) {
-		if (val == QDialogButtonBox::RejectRole)
+		if (val == QDialogButtonBox::RejectRole) {
 			App()->SetTheme(savedTheme);
+#ifdef _WIN32
+			if (toggleAero)
+				SetAeroEnabled(!aeroWasDisabled);
+#endif
+		}
 		ClearChanged();
 		close();
 	}
@@ -2324,19 +2471,15 @@ void OBSBasicSettings::on_advOutRecPathBrowse_clicked()
 
 void OBSBasicSettings::on_advOutFFPathBrowse_clicked()
 {
-	QString filter;
-	filter += QTStr("Basic.Settings.Output.Adv.FFmpeg.SaveFilter.Common");
-	filter += " (*.avi *.mp4 *.flv *.ts *.mkv *.wav *.aac);;";
-	filter += QTStr("Basic.Settings.Output.Adv.FFmpeg.SaveFilter.All");
-	filter += " (*.*)";
-
-	QString file = QFileDialog::getSaveFileName(this,
-			QTStr("Basic.Settings.Output.SelectFile"),
-			ui->simpleOutputPath->text(), filter);
-	if (file.isEmpty())
+	QString dir = QFileDialog::getExistingDirectory(this,
+			QTStr("Basic.Settings.Output.SelectDirectory"),
+			ui->advOutRecPath->text(),
+			QFileDialog::ShowDirsOnly |
+			QFileDialog::DontResolveSymlinks);
+	if (dir.isEmpty())
 		return;
 
-	ui->advOutFFURL->setText(file);
+	ui->advOutFFRecPath->setText(dir);
 }
 
 void OBSBasicSettings::on_advOutEncoder_currentIndexChanged(int idx)
@@ -2420,6 +2563,11 @@ void OBSBasicSettings::on_advOutFFVEncoder_currentIndexChanged(int idx)
 		SetAdvOutputFFmpegEnablement(FF_CODEC_VIDEO,
 				desc.id != 0 || desc.name != nullptr, true);
 	}
+}
+
+void OBSBasicSettings::on_advOutFFType_currentIndexChanged(int idx)
+{
+	ui->advOutFFNoSpace->setHidden(idx != 0);
 }
 
 void OBSBasicSettings::on_colorFormat_currentIndexChanged(const QString &text)
@@ -2623,4 +2771,164 @@ void OBSBasicSettings::AdvOutRecCheckWarnings()
 
 		formLayout->addRow(nullptr, advOutRecWarning);
 	}
+}
+
+static inline QString MakeMemorySizeString(int bitrate, int seconds)
+{
+	QString str = QTStr("Basic.Settings.Advanced.StreamDelay.MemoryUsage");
+	int megabytes = bitrate * seconds / 1000 / 8;
+
+	return str.arg(QString::number(megabytes));
+}
+
+void OBSBasicSettings::UpdateSimpleOutStreamDelayEstimate()
+{
+	int seconds = ui->streamDelaySec->value();
+	int vBitrate = ui->simpleOutputVBitrate->value();
+	int aBitrate = ui->simpleOutputABitrate->currentText().toInt();
+
+	QString msg = MakeMemorySizeString(vBitrate + aBitrate, seconds);
+
+	ui->streamDelayInfo->setText(msg);
+}
+
+void OBSBasicSettings::UpdateAdvOutStreamDelayEstimate()
+{
+	if (!streamEncoderProps)
+		return;
+
+	OBSData settings = streamEncoderProps->GetSettings();
+	int trackIndex = config_get_int(main->Config(), "AdvOut", "TrackIndex");
+	QString aBitrateText;
+
+	switch (trackIndex) {
+	case 1: aBitrateText = ui->advOutTrack1Bitrate->currentText(); break;
+	case 2: aBitrateText = ui->advOutTrack2Bitrate->currentText(); break;
+	case 3: aBitrateText = ui->advOutTrack3Bitrate->currentText(); break;
+	case 4: aBitrateText = ui->advOutTrack4Bitrate->currentText(); break;
+	}
+
+	int seconds = ui->streamDelaySec->value();
+	int vBitrate = (int)obs_data_get_int(settings, "bitrate");
+	int aBitrate = aBitrateText.toInt();
+
+	QString msg = MakeMemorySizeString(vBitrate + aBitrate, seconds);
+
+	ui->streamDelayInfo->setText(msg);
+}
+
+void OBSBasicSettings::UpdateStreamDelayEstimate()
+{
+	if (ui->outputMode->currentIndex() == 0)
+		UpdateSimpleOutStreamDelayEstimate();
+	else
+		UpdateAdvOutStreamDelayEstimate();
+}
+
+void OBSBasicSettings::FillSimpleRecordingValues()
+{
+#define ADD_QUALITY(str) \
+	ui->simpleOutRecQuality->addItem( \
+			QTStr("Basic.Settings.Output.Simple.RecordingQuality." \
+				str), \
+			QString(str));
+#define ENCODER_STR(str) QTStr("Basic.Settings.Output.Simple.Encoder." str)
+
+	ADD_QUALITY("Stream");
+	ADD_QUALITY("Small");
+	ADD_QUALITY("HQ");
+	ADD_QUALITY("Lossless");
+
+	ui->simpleOutRecEncoder->addItem(
+			ENCODER_STR("Software"),
+			QString(SIMPLE_ENCODER_X264));
+	ui->simpleOutRecEncoder->addItem(
+			ENCODER_STR("SoftwareLowCPU"),
+			QString(SIMPLE_ENCODER_X264_LOWCPU));
+#undef ADD_QUALITY
+#undef ENCODER_STR
+}
+
+void OBSBasicSettings::SimpleRecordingQualityChanged()
+{
+	QString qual = ui->simpleOutRecQuality->currentData().toString();
+	bool streamQuality = qual == "Stream";
+	bool losslessQuality = !streamQuality && qual == "Lossless";
+
+	bool showEncoder = !streamQuality && !losslessQuality;
+	ui->simpleOutRecEncoder->setVisible(showEncoder);
+	ui->simpleOutRecEncoderLabel->setVisible(showEncoder);
+	ui->simpleOutRecFormat->setVisible(!losslessQuality);
+	ui->simpleOutRecFormatLabel->setVisible(!losslessQuality);
+
+	SimpleRecordingEncoderChanged();
+}
+
+#define SIMPLE_OUTPUT_WARNING(str) \
+	QTStr("Basic.Settings.Output.Simple.Warn." str)
+
+void OBSBasicSettings::SimpleRecordingEncoderChanged()
+{
+	QString qual = ui->simpleOutRecQuality->currentData().toString();
+	QString warning;
+
+	delete simpleOutRecWarning;
+
+	if (qual == "Stream") {
+		return;
+
+	} else if (qual == "Lossless") {
+		warning  = SIMPLE_OUTPUT_WARNING("Lossless");
+		warning += "\n\n";
+		warning += SIMPLE_OUTPUT_WARNING("Encoder");
+
+	} else {
+		QString enc = ui->simpleOutRecEncoder->currentData().toString();
+		if (enc != SIMPLE_ENCODER_X264 &&
+		    enc != SIMPLE_ENCODER_X264_LOWCPU)
+			return;
+
+		warning = SIMPLE_OUTPUT_WARNING("Encoder");
+	}
+
+	simpleOutRecWarning = new QLabel(warning, this);
+	simpleOutRecWarning->setObjectName("warningLabel");
+	simpleOutRecWarning->setWordWrap(true);
+	ui->simpleOutInfoLayout->addWidget(simpleOutRecWarning);
+}
+
+void OBSBasicSettings::SimpleRecordingQualityLosslessWarning(int idx)
+{
+	if (idx == lastSimpleRecQualityIdx || idx == -1)
+		return;
+
+	QString qual = ui->simpleOutRecQuality->itemData(idx).toString();
+
+	if (loading) {
+		lastSimpleRecQualityIdx = idx;
+		return;
+	}
+
+	if (qual == "Lossless") {
+		QMessageBox::StandardButton button;
+
+		QString warningString =
+			SIMPLE_OUTPUT_WARNING("Lossless") +
+			QString("\n\n") +
+			SIMPLE_OUTPUT_WARNING("Lossless.Msg");
+
+		button = QMessageBox::question(this,
+				SIMPLE_OUTPUT_WARNING("Lossless.Title"),
+				warningString,
+				QMessageBox::Yes | QMessageBox::No);
+
+		if (button == QMessageBox::No) {
+			QMetaObject::invokeMethod(ui->simpleOutRecQuality,
+					"setCurrentIndex", Qt::QueuedConnection,
+					Q_ARG(int, lastSimpleRecQualityIdx));
+			return;
+		}
+	}
+
+	lastSimpleRecQualityIdx = idx;
 }

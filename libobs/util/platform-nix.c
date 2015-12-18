@@ -18,20 +18,28 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <dirent.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <glob.h>
 #include <time.h>
+#include <signal.h>
+
+#include "obsconfig.h"
 
 #if !defined(__APPLE__)
 #include <sys/times.h>
+#include <sys/wait.h>
+#include <spawn.h>
 #endif
 
 #include "darray.h"
 #include "dstr.h"
 #include "platform.h"
+#include "threading.h"
 
 void *os_dlopen(const char *path)
 {
@@ -153,18 +161,69 @@ uint64_t os_gettime_ns(void)
 	return ((uint64_t) ts.tv_sec * 1000000000ULL + (uint64_t) ts.tv_nsec);
 }
 
-/* should return $HOME/.[name] */
+/* should return $HOME/.[name], or when using XDG,
+ * should return $HOME/.config/[name] as default */
 int os_get_config_path(char *dst, size_t size, const char *name)
 {
+#ifdef USE_XDG
+	char *xdg_ptr = getenv("XDG_CONFIG_HOME");
+
+	// If XDG_CONFIG_HOME is unset,
+	// we use the default $HOME/.config/[name] instead
+	if (xdg_ptr == NULL) {
+		char *home_ptr = getenv("HOME");
+		if (home_ptr == NULL)
+			bcrash("Could not get $HOME\n");
+
+		if (!name || !*name) {
+			return snprintf(dst, size, "%s/.config", home_ptr);
+		} else {
+			return snprintf(dst, size, "%s/.config/%s", home_ptr,
+					name);
+		}
+	} else {
+		if (!name || !*name)
+			return snprintf(dst, size, "%s", xdg_ptr);
+		else
+			return snprintf(dst, size, "%s/%s", xdg_ptr, name);
+	}
+#else
 	char *path_ptr = getenv("HOME");
 	if (path_ptr == NULL)
 		bcrash("Could not get $HOME\n");
 
-	return snprintf(dst, size, "%s/.%s", path_ptr, name);
+	if (!name || !*name)
+		return snprintf(dst, size, "%s", path_ptr);
+	else
+		return snprintf(dst, size, "%s/.%s", path_ptr, name);
+#endif
 }
 
+/* should return $HOME/.[name], or when using XDG,
+ * should return $HOME/.config/[name] as default */
 char *os_get_config_path_ptr(const char *name)
 {
+#ifdef USE_XDG
+	struct dstr path;
+	char *xdg_ptr = getenv("XDG_CONFIG_HOME");
+
+	/* If XDG_CONFIG_HOME is unset,
+	 * we use the default $HOME/.config/[name] instead */
+	if (xdg_ptr == NULL) {
+		char *home_ptr = getenv("HOME");
+		if (home_ptr == NULL)
+			bcrash("Could not get $HOME\n");
+
+		dstr_init_copy(&path, home_ptr);
+		dstr_cat(&path, "/.config/");
+		dstr_cat(&path, name);
+	} else {
+		dstr_init_copy(&path, xdg_ptr);
+		dstr_cat(&path, "/");
+		dstr_cat(&path, name);
+	}
+	return path.array;
+#else
 	char *path_ptr = getenv("HOME");
 	if (path_ptr == NULL)
 		bcrash("Could not get $HOME\n");
@@ -174,6 +233,7 @@ char *os_get_config_path_ptr(const char *name)
 	dstr_cat(&path, "/.");
 	dstr_cat(&path, name);
 	return path.array;
+#endif
 }
 
 #endif
@@ -181,6 +241,34 @@ char *os_get_config_path_ptr(const char *name)
 bool os_file_exists(const char *path)
 {
 	return access(path, F_OK) == 0;
+}
+
+size_t os_get_abs_path(const char *path, char *abspath, size_t size)
+{
+	size_t min_size = size < PATH_MAX ? size : PATH_MAX;
+	char newpath[PATH_MAX];
+	int ret;
+
+	if (!abspath)
+		return 0;
+
+	if (!realpath(path, newpath))
+		return 0;
+
+	ret = snprintf(abspath, min_size, "%s", newpath);
+	return ret >= 0 ? ret : 0;
+}
+
+char *os_get_abs_path_ptr(const char *path)
+{
+	char *ptr = bmalloc(512);
+
+	if (!os_get_abs_path(path, ptr, 512)) {
+		bfree(ptr);
+		ptr = NULL;
+	}
+
+	return ptr;
 }
 
 struct os_dir {
@@ -246,6 +334,17 @@ void os_closedir(os_dir_t *dir)
 	}
 }
 
+int64_t os_get_free_space(const char *path)
+{
+	struct statvfs info;
+	int64_t ret = (int64_t)statvfs(path, &info);
+
+	if (ret == 0)
+		ret = (int64_t)info.f_bsize * (int64_t)info.f_bfree;
+
+	return ret;
+}
+
 struct posix_glob_info {
 	struct os_glob_info base;
 	glob_t gl;
@@ -303,7 +402,7 @@ int os_rmdir(const char *path)
 
 int os_mkdir(const char *path)
 {
-	if (mkdir(path, 0777) == 0)
+	if (mkdir(path, 0755) == 0)
 		return MKDIR_SUCCESS;
 
 	return (errno == EEXIST) ? MKDIR_EXISTS : MKDIR_ERROR;
@@ -359,4 +458,141 @@ error:
 		fclose(file_out);
 	fclose(file_in);
 	return ret;
+}
+
+char *os_getcwd(char *path, size_t size)
+{
+	return getcwd(path, size);
+}
+
+int os_chdir(const char *path)
+{
+	return chdir(path);
+}
+
+#if !defined(__APPLE__)
+
+#if HAVE_DBUS
+struct dbus_sleep_info;
+
+extern struct dbus_sleep_info *dbus_sleep_info_create(void);
+extern void dbus_inhibit_sleep(struct dbus_sleep_info *dbus, const char *sleep,
+		bool active);
+extern void dbus_sleep_info_destroy(struct dbus_sleep_info *dbus);
+#endif
+
+struct os_inhibit_info {
+#if HAVE_DBUS
+	struct dbus_sleep_info *dbus;
+#endif
+	pthread_t screensaver_thread;
+	os_event_t *stop_event;
+	char *reason;
+	posix_spawnattr_t attr;
+	bool active;
+};
+
+os_inhibit_t *os_inhibit_sleep_create(const char *reason)
+{
+	struct os_inhibit_info *info = bzalloc(sizeof(*info));
+	sigset_t set;
+
+#if HAVE_DBUS
+	info->dbus = dbus_sleep_info_create();
+#endif
+
+	os_event_init(&info->stop_event, OS_EVENT_TYPE_AUTO);
+	posix_spawnattr_init(&info->attr);
+
+	sigemptyset(&set);
+	posix_spawnattr_setsigmask(&info->attr, &set);
+	sigaddset(&set, SIGPIPE);
+	posix_spawnattr_setsigdefault(&info->attr, &set);
+	posix_spawnattr_setflags(&info->attr,
+			POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK);
+
+	info->reason = bstrdup(reason);
+	return info;
+}
+
+extern char **environ;
+
+static void reset_screensaver(os_inhibit_t *info)
+{
+	char *argv[3] = {(char*)"xdg-screensaver", (char*)"reset", NULL};
+	pid_t pid;
+
+	int err = posix_spawnp(&pid, "xdg-screensaver", NULL, &info->attr,
+			argv, environ);
+	if (err == 0) {
+		int status;
+		while (waitpid(pid, &status, 0) == -1);
+	} else {
+		blog(LOG_WARNING, "Failed to create xdg-screensaver: %d", err);
+	}
+}
+
+static void *screensaver_thread(void *param)
+{
+	os_inhibit_t *info = param;
+
+	while (os_event_timedwait(info->stop_event, 30000) == ETIMEDOUT)
+		reset_screensaver(info);
+
+	return NULL;
+}
+
+bool os_inhibit_sleep_set_active(os_inhibit_t *info, bool active)
+{
+	int ret;
+
+	if (!info)
+		return false;
+	if (info->active == active)
+		return false;
+
+#if HAVE_DBUS
+	if (info->dbus)
+		dbus_inhibit_sleep(info->dbus, info->reason, active);
+#endif
+
+	if (!info->stop_event)
+		return true;
+
+	if (active) {
+		ret = pthread_create(&info->screensaver_thread, NULL,
+				&screensaver_thread, info);
+		if (ret < 0) {
+			blog(LOG_ERROR, "Failed to create screensaver "
+			                "inhibitor thread");
+			return false;
+		}
+	} else {
+		os_event_signal(info->stop_event);
+		pthread_join(info->screensaver_thread, NULL);
+	}
+
+	info->active = active;
+	return true;
+}
+
+void os_inhibit_sleep_destroy(os_inhibit_t *info)
+{
+	if (info) {
+		os_inhibit_sleep_set_active(info, false);
+#if HAVE_DBUS
+		dbus_sleep_info_destroy(info->dbus);
+#endif
+		os_event_destroy(info->stop_event);
+		posix_spawnattr_destroy(&info->attr);
+		bfree(info->reason);
+		bfree(info);
+	}
+}
+
+#endif
+
+void os_breakpoint()
+{
+	raise(SIGTRAP);
 }

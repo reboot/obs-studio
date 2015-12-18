@@ -28,18 +28,6 @@ struct obs_core *obs = NULL;
 extern void add_default_module_paths(void);
 extern char *find_libobs_data_file(const char *file);
 
-static inline void make_gs_init_data(struct gs_init_data *gid,
-		const struct obs_video_info *ovi)
-{
-	memcpy(&gid->window, &ovi->window, sizeof(struct gs_window));
-	gid->cx              = ovi->window_width;
-	gid->cy              = ovi->window_height;
-	gid->num_backbuffers = 2;
-	gid->format          = GS_RGBA;
-	gid->zsformat        = GS_ZS_NONE;
-	gid->adapter         = ovi->adapter;
-}
-
 static inline void make_video_info(struct video_output_info *vi,
 		struct obs_video_info *ovi)
 {
@@ -230,14 +218,11 @@ static bool obs_init_textures(struct obs_video_info *ovi)
 static int obs_init_graphics(struct obs_video_info *ovi)
 {
 	struct obs_core_video *video = &obs->video;
-	struct gs_init_data graphics_data;
 	bool success = true;
 	int errorcode;
 
-	make_gs_init_data(&graphics_data, ovi);
-
 	errorcode = gs_create(&video->graphics, ovi->graphics_module,
-			&graphics_data);
+			ovi->adapter);
 	if (errorcode != GS_SUCCESS) {
 		switch (errorcode) {
 		case GS_ERROR_MODULE_NOT_FOUND:
@@ -360,12 +345,6 @@ static int obs_init_video(struct obs_video_info *ovi)
 		return OBS_VIDEO_FAIL;
 	}
 
-	if (!obs_display_init(&video->main_display, NULL))
-		return OBS_VIDEO_FAIL;
-
-	video->main_display.cx = ovi->window_width;
-	video->main_display.cy = ovi->window_height;
-
 	gs_enter_context(video->graphics);
 
 	if (ovi->gpu_conversion && !obs_init_gpu_conversion(ovi))
@@ -404,8 +383,6 @@ static void obs_free_video(void)
 	struct obs_core_video *video = &obs->video;
 
 	if (video->video) {
-		obs_display_free(&video->main_display);
-
 		video_output_close(video->video);
 		video->video = NULL;
 
@@ -710,9 +687,17 @@ extern const struct obs_source_info scene_info;
 
 extern void log_system_info(void);
 
-static bool obs_init(const char *locale)
+static bool obs_init(const char *locale, const char *module_config_path,
+		profiler_name_store_t *store)
 {
 	obs = bzalloc(sizeof(struct obs_core));
+
+	obs->name_store_owned = !store;
+	obs->name_store = store ? store : profiler_name_store_create();
+	if (!obs->name_store) {
+		blog(LOG_ERROR, "Couldn't create profiler name store");
+		return false;
+	}
 
 	log_system_info();
 
@@ -723,6 +708,8 @@ static bool obs_init(const char *locale)
 	if (!obs_init_hotkeys())
 		return false;
 
+	if (module_config_path)
+		obs->module_config_path = bstrdup(module_config_path);
 	obs->locale = bstrdup(locale);
 	obs_register_source(&scene_info);
 	add_default_module_paths();
@@ -731,11 +718,17 @@ static bool obs_init(const char *locale)
 
 #ifdef _WIN32
 extern void initialize_crash_handler(void);
+extern void initialize_com(void);
+extern void uninitialize_com(void);
 #endif
 
-bool obs_startup(const char *locale)
+static const char *obs_startup_name = "obs_startup";
+bool obs_startup(const char *locale, const char *module_config_path,
+		profiler_name_store_t *store)
 {
 	bool success;
+
+	profile_start(obs_startup_name);
 
 	if (obs) {
 		blog(LOG_WARNING, "Tried to call obs_startup more than once");
@@ -744,9 +737,11 @@ bool obs_startup(const char *locale)
 
 #ifdef _WIN32
 	initialize_crash_handler();
+	initialize_com();
 #endif
 
-	success = obs_init(locale);
+	success = obs_init(locale, module_config_path, store);
+	profile_end(obs_startup_name);
 	if (!success)
 		obs_shutdown();
 
@@ -760,14 +755,26 @@ void obs_shutdown(void)
 	if (!obs)
 		return;
 
-	da_free(obs->input_types);
-	da_free(obs->filter_types);
-	da_free(obs->encoder_types);
-	da_free(obs->transition_types);
-	da_free(obs->output_types);
-	da_free(obs->service_types);
-	da_free(obs->modal_ui_callbacks);
-	da_free(obs->modeless_ui_callbacks);
+#define FREE_REGISTERED_TYPES(structure, list) \
+	do { \
+		for (size_t i = 0; i < list.num; i++) { \
+			struct structure *item = &list.array[i]; \
+			if (item->type_data && item->free_type_data) \
+				item->free_type_data(item->type_data); \
+		} \
+		da_free(list); \
+	} while (false)
+
+	FREE_REGISTERED_TYPES(obs_source_info, obs->input_types);
+	FREE_REGISTERED_TYPES(obs_source_info, obs->filter_types);
+	FREE_REGISTERED_TYPES(obs_source_info, obs->transition_types);
+	FREE_REGISTERED_TYPES(obs_output_info, obs->output_types);
+	FREE_REGISTERED_TYPES(obs_encoder_info, obs->encoder_types);
+	FREE_REGISTERED_TYPES(obs_service_info, obs->service_types);
+	FREE_REGISTERED_TYPES(obs_modal_ui, obs->modal_ui_callbacks);
+	FREE_REGISTERED_TYPES(obs_modeless_ui, obs->modeless_ui_callbacks);
+
+#undef FREE_REGISTERED_TYPES
 
 	stop_video();
 	stop_hotkeys();
@@ -792,9 +799,17 @@ void obs_shutdown(void)
 		free_module_path(obs->module_paths.array+i);
 	da_free(obs->module_paths);
 
+	if (obs->name_store_owned)
+		profiler_name_store_free(obs->name_store);
+
+	bfree(obs->module_config_path);
 	bfree(obs->locale);
 	bfree(obs);
 	obs = NULL;
+
+#ifdef _WIN32
+	uninitialize_com();
+#endif
 }
 
 bool obs_initialized(void)
@@ -874,6 +889,7 @@ int obs_reset_video(struct obs_video_info *ovi)
 		}
 	}
 
+	blog(LOG_INFO, "---------------------------------");
 	blog(LOG_INFO, "video settings reset:\n"
 	               "\tbase resolution:   %dx%d\n"
 	               "\toutput resolution: %dx%d\n"
@@ -907,10 +923,11 @@ bool obs_reset_audio(const struct obs_audio_info *oai)
 	ai.speakers = oai->speakers;
 	ai.buffer_ms = oai->buffer_ms;
 
+	blog(LOG_INFO, "---------------------------------");
 	blog(LOG_INFO, "audio settings reset:\n"
 	               "\tsamples per sec: %d\n"
 	               "\tspeakers:        %d\n"
-	               "\tbuffering (ms):  %d\n",
+	               "\tbuffering (ms):  %d",
 	               (int)ai.samples_per_sec,
 	               (int)ai.speakers,
 	               (int)ai.buffer_ms);
@@ -1319,46 +1336,35 @@ obs_service_t *obs_get_service_by_name(const char *name)
 			&obs->data.services_mutex, obs_service_addref_safe_);
 }
 
-gs_effect_t *obs_get_default_effect(void)
+gs_effect_t *obs_get_base_effect(enum obs_base_effect effect)
 {
 	if (!obs) return NULL;
-	return obs->video.default_effect;
+
+	switch (effect) {
+	case OBS_EFFECT_DEFAULT:
+		return obs->video.default_effect;
+	case OBS_EFFECT_DEFAULT_RECT:
+		return obs->video.default_rect_effect;
+	case OBS_EFFECT_OPAQUE:
+		return obs->video.opaque_effect;
+	case OBS_EFFECT_SOLID:
+		return obs->video.solid_effect;
+	case OBS_EFFECT_BICUBIC:
+		return obs->video.bicubic_effect;
+	case OBS_EFFECT_LANCZOS:
+		return obs->video.lanczos_effect;
+	case OBS_EFFECT_BILINEAR_LOWRES:
+		return obs->video.bilinear_lowres_effect;
+	}
+
+	return NULL;
 }
 
+/* DEPRECATED */
 gs_effect_t *obs_get_default_rect_effect(void)
 {
 	if (!obs) return NULL;
 	return obs->video.default_rect_effect;
-}
-
-gs_effect_t *obs_get_opaque_effect(void)
-{
-	if (!obs) return NULL;
-	return obs->video.opaque_effect;
-}
-
-gs_effect_t *obs_get_solid_effect(void)
-{
-	if (!obs) return NULL;
-	return obs->video.solid_effect;
-}
-
-gs_effect_t *obs_get_bicubic_effect(void)
-{
-	if (!obs) return NULL;
-	return obs->video.bicubic_effect;
-}
-
-gs_effect_t *obs_get_lanczos_effect(void)
-{
-	if (!obs) return NULL;
-	return obs->video.lanczos_effect;
-}
-
-gs_effect_t *obs_get_bilinear_lowres_effect(void)
-{
-	if (!obs) return NULL;
-	return obs->video.bilinear_lowres_effect;
 }
 
 signal_handler_t *obs_get_signal_handler(void)
@@ -1371,30 +1377,6 @@ proc_handler_t *obs_get_proc_handler(void)
 {
 	if (!obs) return NULL;
 	return obs->procs;
-}
-
-void obs_add_draw_callback(
-		void (*draw)(void *param, uint32_t cx, uint32_t cy),
-		void *param)
-{
-	if (!obs) return;
-
-	obs_display_add_draw_callback(&obs->video.main_display, draw, param);
-}
-
-void obs_remove_draw_callback(
-		void (*draw)(void *param, uint32_t cx, uint32_t cy),
-		void *param)
-{
-	if (!obs) return;
-
-	obs_display_remove_draw_callback(&obs->video.main_display, draw, param);
-}
-
-void obs_resize(uint32_t cx, uint32_t cy)
-{
-	if (!obs || !obs->video.video || !obs->video.graphics) return;
-	obs_display_resize(&obs->video.main_display, cx, cy);
 }
 
 void obs_render_main_view(void)
@@ -1641,7 +1623,7 @@ static inline char *dup_name(const char *name)
 {
 	if (!name || !*name) {
 		struct dstr unnamed = {0};
-		dstr_printf(&unnamed, "__unnamed%004lld",
+		dstr_printf(&unnamed, "__unnamed%04lld",
 				obs->data.unnamed_index++);
 
 		return unnamed.array;
@@ -1754,13 +1736,10 @@ void obs_context_data_setname(struct obs_context_data *context,
 	pthread_mutex_unlock(&context->rename_cache_mutex);
 }
 
-void obs_preview_set_enabled(bool enable)
+profiler_name_store_t *obs_get_profiler_name_store(void)
 {
-	if (obs)
-		obs->video.main_display.enabled = enable;
-}
+	if (!obs)
+		return NULL;
 
-bool obs_preview_enabled(void)
-{
-	return obs ? obs->video.main_display.enabled : false;
+	return obs->name_store;
 }

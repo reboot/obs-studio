@@ -97,6 +97,8 @@ private:
 	bool loading = true;
 	std::string savedTheme;
 
+	int lastSimpleRecQualityIdx = 0;
+
 	OBSFFFormatDesc formats;
 
 	OBSPropertiesView *streamProperties = nullptr;
@@ -104,6 +106,7 @@ private:
 	OBSPropertiesView *recordEncoderProps = nullptr;
 
 	QPointer<QLabel> advOutRecWarning;
+	QPointer<QLabel> simpleOutRecWarning;
 
 	using AudioSource_t =
 		std::tuple<OBSWeakSource,
@@ -222,11 +225,13 @@ private:
 	void SaveAdvancedSettings();
 	void SaveSettings();
 
+	void UpdateSimpleOutStreamDelayEstimate();
+	void UpdateAdvOutStreamDelayEstimate();
+
+	void FillSimpleRecordingValues();
+
 private slots:
 	void on_theme_activated(int idx);
-
-	void on_simpleOutUseBufsize_toggled(bool checked);
-	void on_simpleOutputVBitrate_valueChanged(int val);
 
 	void on_listWidget_itemSelectionChanged();
 	void on_buttonBox_clicked(QAbstractButton *button);
@@ -240,6 +245,7 @@ private slots:
 	void on_advOutFFFormat_currentIndexChanged(int idx);
 	void on_advOutFFAEncoder_currentIndexChanged(int idx);
 	void on_advOutFFVEncoder_currentIndexChanged(int idx);
+	void on_advOutFFType_currentIndexChanged(int idx);
 
 	void on_colorFormat_currentIndexChanged(const QString &text);
 
@@ -259,7 +265,13 @@ private slots:
 	void AdvancedChanged();
 	void AdvancedChangedRestart();
 
+	void UpdateStreamDelayEstimate();
+
 	void AdvOutRecCheckWarnings();
+
+	void SimpleRecordingQualityChanged();
+	void SimpleRecordingEncoderChanged();
+	void SimpleRecordingQualityLosslessWarning(int idx);
 
 protected:
 	virtual void closeEvent(QCloseEvent *event);

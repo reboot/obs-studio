@@ -1,11 +1,16 @@
 project(coreaudio-encoder)
 
 set(coreaudio-encoder_SOURCES
-	encoder.c)
+	encoder.cpp)
 
 if (WIN32)
 	set(coreaudio-encoder_HEADERS windows-imports.h)
 	set(coreaudio-encoder_LIBS )
+
+	if (MINGW)
+		set_source_files_properties(${coreaudio-encoder_SOURCES}
+			PROPERTIES COMPILE_FLAGS "-Wno-multichar")
+	endif()
 else()
 	find_library(COREFOUNDATION CoreFoundation)
 	find_library(COREAUDIO CoreAudio)
