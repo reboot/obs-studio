@@ -111,6 +111,9 @@ static obs_properties_t *mask_filter_properties(void *data)
 	obs_property_list_add_string(p,
 			obs_module_text("MaskBlendType.BlendSubtraction"),
 			"blend_sub_filter.effect");
+	obs_property_list_add_string(p,
+			obs_module_text("MaskBlendType.BlendMix"),
+			"blend_mix.effect");
 
 	obs_properties_add_path(props, SETTING_IMAGE_PATH, TEXT_IMAGE_PATH,
 			OBS_PATH_FILE, filter_str.array, NULL);
