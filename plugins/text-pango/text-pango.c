@@ -168,12 +168,13 @@ void render_text(struct pango_source *src)
 
 		pango_layout_iter_get_line_extents(iter, NULL, &rect);
 		int xpos = xoffset + rect.x / PANGO_SCALE +
-				outline_width / 2.0;
+				outline_width;
 		int ypos = pango_layout_iter_get_baseline(iter) / PANGO_SCALE +
-				outline_width / 2.0;
+				outline_width;
 
 		if (drop_shadow_offset > 0) {
-			cairo_move_to(render_context, xpos + drop_shadow_offset,
+			cairo_move_to(render_context,
+					xpos + drop_shadow_offset,
 					ypos + drop_shadow_offset);
 			pango_cairo_layout_line_path(render_context, line);
 			cairo_set_source_rgb(render_context,
