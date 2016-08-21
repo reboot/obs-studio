@@ -85,10 +85,11 @@ cairo_t *create_cairo_context(struct pango_source *src,
 	return cairo_create(*surface);
 }
 
-#define RGB_CAIRO(c) \
+#define RGBA_CAIRO(c) \
 	((c & 0xff0000) >> 16) / 256.0, \
 	((c & 0xff00) >> 8) / 256.0, \
-	 (c & 0xff) / 256.0);
+	 (c & 0xff) / 256.0, \
+	((c & 0xff000000) >> 24) / 256.0
 
 void render_text(struct pango_source *src)
 {
@@ -177,8 +178,8 @@ void render_text(struct pango_source *src)
 					xpos + drop_shadow_offset,
 					ypos + drop_shadow_offset);
 			pango_cairo_layout_line_path(render_context, line);
-			cairo_set_source_rgb(render_context,
-					RGB_CAIRO(src->drop_shadow_color);
+			cairo_set_source_rgba(render_context,
+					RGBA_CAIRO(src->drop_shadow_color));
 			cairo_fill(render_context);
 		}
 
@@ -187,8 +188,8 @@ void render_text(struct pango_source *src)
 
 		if (outline_width > 0) {
 			cairo_set_line_width(render_context, outline_width * 2);
-			cairo_set_source_rgb(render_context,
-					RGB_CAIRO(src->outline_color);
+			cairo_set_source_rgba(render_context,
+					RGBA_CAIRO(src->outline_color));
 			cairo_stroke_preserve(render_context);
 		}
 
@@ -197,10 +198,10 @@ void render_text(struct pango_source *src)
 				0, y1 / PANGO_SCALE,
 				0, y2 / PANGO_SCALE);
 		cairo_pattern_set_extend(pattern, CAIRO_EXTEND_NONE);
-		cairo_pattern_add_color_stop_rgb(pattern, 0.0,
-				RGB_CAIRO(src->color[0]);
-		cairo_pattern_add_color_stop_rgb(pattern, 1.0,
-				RGB_CAIRO(src->color[1]);
+		cairo_pattern_add_color_stop_rgba(pattern, 0.0,
+				RGBA_CAIRO(src->color[0]));
+		cairo_pattern_add_color_stop_rgba(pattern, 1.0,
+				RGBA_CAIRO(src->color[1]));
 
 		cairo_set_source(render_context, pattern);
 		cairo_fill(render_context);
@@ -411,7 +412,6 @@ static void pango_video_tick(void *data, float seconds)
 				else
 					load_text_from_file(src,
 						src->text_file);
-				printf("%s\n", src->text);
 				render_text(src);
 			}
 		}
