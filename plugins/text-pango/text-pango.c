@@ -262,6 +262,12 @@ static void pango_source_get_defaults(obs_data_t *settings)
 
 	obs_data_set_default_int(settings, "color1", 0xFFFFFFFF);
 	obs_data_set_default_int(settings, "color2", 0xFFFFFFFF);
+
+	obs_data_set_default_int(settings, "outline_width", 2);
+	obs_data_set_default_int(settings, "outline_color", 0xFF000000);
+
+	obs_data_set_default_int(settings, "drop_shadow_offset", 4);
+	obs_data_set_default_int(settings, "drop_shadow_color", 0xFF000000);
 }
 
 static bool pango_source_properties_outline_changed(obs_properties_t *props,
@@ -481,7 +487,6 @@ static void *pango_source_create(obs_data_t *settings, obs_source_t *source)
 	pango_source_update(src, settings);
 
 	return src;
-
 }
 
 static struct obs_source_info pango_source_info = {
