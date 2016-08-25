@@ -134,8 +134,11 @@ void render_text(struct pango_source *src)
 		src->width = src->custom_width;
 	else
 		src->width = text_width;
-	src->width += outline_width + max(outline_width, drop_shadow_offset);
-	src->height = text_height + outline_width;
+	src->width += outline_width;
+	src->width += max(outline_width, drop_shadow_offset);
+	src->height = text_height;
+	src->height += outline_width;
+	src->height += max(outline_width, drop_shadow_offset);
 	render_context = create_cairo_context(src, &surface, &surface_data);
 
 	double xoffset;
@@ -154,6 +157,11 @@ void render_text(struct pango_source *src)
 	} else {
 		xoffset = 0;
 	}
+	xoffset += outline_width;
+
+	double yoffset;
+	yoffset = 0;
+	yoffset += outline_width;
 
 	/* Render */
 	pango_cairo_update_layout(render_context, layout);
@@ -168,10 +176,9 @@ void render_text(struct pango_source *src)
 		line = pango_layout_iter_get_line_readonly(iter);
 
 		pango_layout_iter_get_line_extents(iter, NULL, &rect);
-		int xpos = xoffset + rect.x / PANGO_SCALE +
-				outline_width;
-		int ypos = pango_layout_iter_get_baseline(iter) / PANGO_SCALE +
-				outline_width;
+		int baseline = pango_layout_iter_get_baseline(iter);
+		int xpos = xoffset + rect.x / PANGO_SCALE;
+		int ypos = yoffset + baseline / PANGO_SCALE;
 
 		if (drop_shadow_offset > 0) {
 			cairo_move_to(render_context,
@@ -195,8 +202,8 @@ void render_text(struct pango_source *src)
 
 		pango_layout_iter_get_line_yrange(iter, &y1, &y2);
 		pattern = cairo_pattern_create_linear(
-				0, y1 / PANGO_SCALE,
-				0, y2 / PANGO_SCALE);
+				0, y1 / PANGO_SCALE + yoffset,
+				0, y2 / PANGO_SCALE + yoffset);
 		cairo_pattern_set_extend(pattern, CAIRO_EXTEND_NONE);
 		cairo_pattern_add_color_stop_rgba(pattern, 0.0,
 				RGBA_CAIRO(src->color[0]));
