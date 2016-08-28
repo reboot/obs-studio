@@ -253,12 +253,13 @@ static uint32_t pango_source_get_height(void *data)
 
 static void pango_source_get_defaults(obs_data_t *settings)
 {
-	obs_data_t *font_obj;
+	obs_data_t *font;
 
-	font_obj = obs_data_create();
-	obs_data_set_default_string(font_obj, "face", DEFAULT_FACE);
-	obs_data_set_default_int(font_obj, "size", 32);
-	obs_data_set_default_obj(settings, "font", font_obj);
+	font = obs_data_create();
+	obs_data_set_default_string(font, "face", DEFAULT_FACE);
+	obs_data_set_default_int(font, "size", 32);
+	obs_data_set_default_obj(settings, "font", font);
+	obs_data_release(font);
 
 	obs_data_set_default_int(settings, "color1", 0xFFFFFFFF);
 	obs_data_set_default_int(settings, "color2", 0xFFFFFFFF);
@@ -434,14 +435,15 @@ static void pango_video_tick(void *data, float seconds)
 static void pango_source_update(void *data, obs_data_t *settings)
 {
 	struct pango_source *src = data;
-	obs_data_t *font_obj;
+	obs_data_t *font;
 
-	font_obj = obs_data_get_obj(settings, "font");
+	font = obs_data_get_obj(settings, "font");
 	if (src->font_name)
 		bfree(src->font_name);
-	src->font_name  = bstrdup(obs_data_get_string(font_obj, "face"));
-	src->font_size   = (uint16_t)obs_data_get_int(font_obj, "size");
-	src->font_flags  = (uint32_t)obs_data_get_int(font_obj, "flags");
+	src->font_name  = bstrdup(obs_data_get_string(font, "face"));
+	src->font_size   = (uint16_t)obs_data_get_int(font, "size");
+	src->font_flags  = (uint32_t)obs_data_get_int(font, "flags");
+	obs_data_release(font);
 
 	if (src->text)
 		bfree(src->text);
@@ -459,16 +461,12 @@ static void pango_source_update(void *data, obs_data_t *settings)
 	src->color[1] = (uint32_t)obs_data_get_int(settings, "color2");
 
 	src->outline = obs_data_get_bool(settings, "outline");
-	if (src->outline) {
-		src->outline_width = obs_data_get_int(settings, "outline_width");
-		src->outline_color = obs_data_get_int(settings, "outline_color");
-	}
+	src->outline_width = obs_data_get_int(settings, "outline_width");
+	src->outline_color = obs_data_get_int(settings, "outline_color");
 
 	src->drop_shadow = obs_data_get_bool(settings, "drop_shadow");
-	if (src->drop_shadow) {
-		src->drop_shadow_offset = obs_data_get_int(settings, "drop_shadow_offset");
-		src->drop_shadow_color = obs_data_get_int(settings, "drop_shadow_color");
-	}
+	src->drop_shadow_offset = obs_data_get_int(settings, "drop_shadow_offset");
+	src->drop_shadow_color = obs_data_get_int(settings, "drop_shadow_color");
 
 	src->custom_width = (uint32_t)obs_data_get_int(settings, "custom_width");
 	src->word_wrap = obs_data_get_bool(settings, "word_wrap");
